@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Raphael Agent Hub</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>&#129517;</text></svg>">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Warm Brief Command</p>
+        <h1>Raphael Agent Hub</h1>
+        <p class="sub">전체 에이전트 체계를 먼저 보고, 필요할 때 PM과 대화하듯 업무지시서를 열어 만들고, 최근 결과와 검토 흐름을 이어보는 운영 작업공간</p>
+      </div>
+      <div class="hero-actions">
+        <button id="openBriefModalBtn" class="primary-btn">업무 지시 작성</button>
+        <button id="autoDispatchBtn" class="secondary-btn">대기 중인 일 보내기</button>
+        <button id="refreshBtn" class="ghost-btn">새로고침</button>
+      </div>
+    </header>
+
+    <section class="command-band panel agent-stage">
+      <div class="agent-stage-head">
+        <div>
+          <p class="section-kicker">전체 에이전트 보드</p>
+          <h2>Agent Stage</h2>
+          <p class="hint">카드보다 더 가볍게, 각 에이전트가 지금 움직이는지·막혔는지·검토 중인지 한눈에 보이도록 정리합니다.</p>
+        </div>
+      </div>
+      <div id="agentBoard" class="agent-world"></div>
+    </section>
+
+    <section class="panel decision-panel">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">우선 판단할 흐름</p>
+          <h2>업무 보드</h2>
+          <p class="hint">최근순이 아니라 지금 개입이 필요한 순서대로 정리됩니다.</p>
+        </div>
+        <div id="taskSummary" class="mini-summary"></div>
+      </div>
+      <div id="taskBoard" class="task-board"></div>
+    </section>
+
+    <section class="flow-grid">
+      <div class="panel timeline-panel">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">최근 흐름</p>
+            <h2>결과와 검토</h2>
+            <p class="hint">에이전트가 남긴 결과와 검토 메모를 시간 흐름으로 읽을 수 있습니다.</p>
+          </div>
+        </div>
+        <div id="recentFlow" class="timeline"></div>
+      </div>
+
+      <div class="side-stack">
+        <div class="panel side-panel">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">도착한 결과</p>
+              <h2>최근 산출물</h2>
+            </div>
+          </div>
+          <div id="resultsList" class="item-list compact"></div>
+        </div>
+
+        <div class="panel side-panel">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">운영 기록</p>
+              <h2>다이제스트</h2>
+            </div>
+          </div>
+          <div id="digestsList" class="item-list compact"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="briefModal" class="modal-shell is-hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="true"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="briefModalTitle">
+      <div class="modal-head">
+        <div>
+          <p class="section-kicker">PM 대화형 작성</p>
+          <h2 id="briefModalTitle">업무 지시서 만들기</h2>
+          <p class="hint">PM 에이전트와 대화하듯 목적과 결과를 정리합니다. 최근 결과물 파일은 메인 페이지에서 확인합니다.</p>
+        </div>
+        <button id="closeBriefModalBtn" class="ghost-btn modal-close-btn" type="button">닫기</button>
+      </div>
+
+      <div class="modal-grid pm-layout-grid">
+        <section class="modal-conversation panel-subtle pm-chat-panel">
+          <div class="pm-thread" id="pmDialogue"></div>
+
+          <div class="pm-chat-compose">
+            <label>
+              <span>PM에게 설명하기</span>
+              <textarea id="pmChatInput" rows="5" placeholder="예: researcher-co와 researcher_agent가 먼저 자료를 모으고, writer-co가 초안을 만든 뒤 verify-co와 HermesVerifier가 검토하도록 진행하고 싶어."></textarea>
+            </label>
+            <div class="form-actions">
+              <button id="sendPmChatBtn" class="primary-btn" type="button">PM에게 보내기</button>
+              <p id="pmChatStatus" class="status-text"></p>
+            </div>
+          </div>
+
+          <div id="pmChecklist" class="pm-checklist"></div>
+        </section>
+
+        <section class="modal-composer panel-subtle pm-brief-panel">
+          <div class="pm-brief-head">
+            <p class="section-kicker">PM 작성 요약</p>
+            <h3>대화 기준 브리프 초안</h3>
+            <p class="hint">작업 제목과 반드시 나와야 할 결과는 PM 에이전트가 대화를 보고 정리합니다.</p>
+          </div>
+
+          <div class="pm-summary-card">
+            <div class="pm-summary-block">
+              <div class="pm-summary-label">작업 제목</div>
+              <div id="pmDraftTitle" class="pm-summary-value empty">아직 PM이 제목을 정리하지 않았습니다.</div>
+            </div>
+            <div class="pm-summary-block">
+              <div class="pm-summary-label">나와야 하는 결과</div>
+              <div id="pmDraftObjective" class="pm-summary-value empty">대화를 시작하면 PM이 결과를 정리합니다.</div>
+            </div>
+            <div class="pm-summary-block">
+              <div class="pm-summary-label">PM의 해석 — 다르면 바로잡아 주세요</div>
+              <div id="pmDraftInterpretation" class="pm-summary-value empty">PM이 요청을 어떻게 이해했는지 여기 표시됩니다.</div>
+            </div>
+          </div>
+
+          <form id="taskForm" class="task-form modal-task-form">
+            <input name="title" type="hidden" />
+            <textarea name="objective" hidden></textarea>
+
+            <label class="file-attach">
+              <span>입력 파일 첨부 (선택 — RFP·계약서·데이터 등 분석 대상)</span>
+              <input id="taskFiles" type="file" multiple />
+            </label>
+
+            <div class="option-bar">
+              <div class="option-hint">세부 옵션은 필요할 때만 엽니다.</div>
+              <button id="toggleAdvancedBtn" class="mini-btn subtle-btn" type="button">세부 옵션</button>
+            </div>
+
+            <div id="advancedFields" class="advanced-fields is-collapsed">
+              <div class="two-col">
+                <label>
+                  <span>진행 방식</span>
+                  <select name="execution_mode">
+                    <option selected>research-pipeline</option>
+                    <option>primary+review</option>
+                    <option>competitive</option>
+                    <option>single</option>
+                  </select>
+                </label>
+                <label>
+                  <span>검토 담당</span>
+                  <input name="reviewer" value="HermesVerifier" />
+                </label>
+              </div>
+              <label>
+                <span>먼저 고려할 에이전트</span>
+                <input name="assigned_workers" placeholder="예: researcher-co, researcher_agent" />
+              </label>
+              <label>
+                <span>배경과 맥락</span>
+                <textarea name="context" rows="5" placeholder="이 일이 왜 필요한지, 어떤 기존 결정 위에서 움직이는지 적어주세요."></textarea>
+              </label>
+              <label>
+                <span>제약사항</span>
+                <textarea name="constraints" rows="3" placeholder="예: 파괴적 변경 금지, PM 관점 유지, 분석 우선"></textarea>
+              </label>
+              <label>
+                <span>원하는 산출물 형태</span>
+                <textarea name="deliverable" rows="3" placeholder="예: 요약 보고서 + 다음 액션 + 검토 메모"></textarea>
+              </label>
+            </div>
+
+            <div class="form-actions modal-actions">
+              <button type="submit" class="primary-btn">브리프 저장하고 흐름 시작하기</button>
+              <p id="formStatus" class="status-text"></p>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="detailModal" class="modal-shell is-hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-detail="true"></div>
+    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <div class="modal-head">
+        <div class="detail-head-meta">
+          <p class="section-kicker" id="detailKicker">결과 상세</p>
+          <h2 id="detailTitle">—</h2>
+        </div>
+        <div class="detail-head-actions">
+          <a id="detailDownload" class="mini-btn" href="#">다운로드</a>
+          <a id="detailNewTab" class="mini-btn subtle-btn" href="#" target="_blank">새 탭</a>
+          <button id="closeDetailBtn" class="ghost-btn modal-close-btn" type="button">닫기</button>
+        </div>
+      </div>
+      <div id="detailBody" class="detail-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

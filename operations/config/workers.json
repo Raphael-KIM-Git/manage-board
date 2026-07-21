@@ -1,0 +1,63 @@
+{
+  "researcher-co": {
+    "enabled": true,
+    "mode": "ssh",
+    "host": "100.120.123.120",
+    "user": "raphael",
+    "port": 22,
+    "remote_inbox_dir": "~/agent-hub/inbox/researcher-co",
+    "dispatch_command_template": "",
+    "notes": "MacBook Claude research agent. Existing Claude-side agent name should remain researcher-co."
+  },
+  "writer-co": {
+    "enabled": true,
+    "mode": "ssh",
+    "host": "100.120.123.120",
+    "user": "raphael",
+    "port": 22,
+    "remote_inbox_dir": "~/agent-hub/inbox/writer-co",
+    "dispatch_command_template": "",
+    "notes": "MacBook Claude writing agent. Existing Claude-side agent name should remain writer-co."
+  },
+  "verify-co": {
+    "enabled": true,
+    "mode": "ssh",
+    "host": "100.120.123.120",
+    "user": "raphael",
+    "port": 22,
+    "remote_inbox_dir": "~/agent-hub/inbox/verify-co",
+    "dispatch_command_template": "",
+    "notes": "MacBook Claude verification agent. Existing Claude-side agent name should remain verify-co."
+  },
+  "researcher_agent": {
+    "enabled": true,
+    "mode": "ssh",
+    "host": "100.120.123.120",
+    "user": "raphael",
+    "port": 22,
+    "remote_inbox_dir": "~/agent-hub/inbox/researcher_agent",
+    "dispatch_command_template": "",
+    "notes": "MacBook OpenClaw research agent. Existing OpenClaw-side agent name should remain researcher_agent."
+  },
+  "HermesVerifier": {
+    "enabled": true,
+    "mode": "local",
+    "notes": "Local hub profile; not a remote dispatch target."
+  },
+  "HermesResearcher": {
+    "enabled": true,
+    "mode": "local-inbox",
+    "local_inbox_dir": "/home/raphael/myproject/operations/local-inbox/HermesResearcher",
+    "notes": "PC 로컬 실행 (hermes_local_runner.py, AgentHubLocalRunner 2분 주기)"
+  },
+  "analyst-co": {
+    "enabled": true,
+    "mode": "ssh",
+    "host": "100.120.123.120",
+    "user": "raphael",
+    "port": 22,
+    "remote_inbox_dir": "~/agent-hub/inbox/analyst-co",
+    "dispatch_command_template": "",
+    "notes": "MacBook Claude analysis agent (input file analysis: RFP/contract/data). Claude-side agent name: analyst-co."
+  }
+}

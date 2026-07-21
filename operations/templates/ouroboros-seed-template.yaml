@@ -1,0 +1,29 @@
+# Ouroboros-inspired Seed Template
+# Dashboard creates versioned YAML/JSON/Markdown Seed artifacts from this contract.
+
+seed_id: SEED-T-YYYYMMDD-NNN-v1
+task_id: T-YYYYMMDD-NNN
+version: 1
+status: awaiting_approval # awaiting_approval | approved | superseded
+created_at: 2026-07-21T00:00:00
+approved_at: ""
+approved_by: ""
+
+title: ""
+objective: ""
+context: ""
+constraints: ""
+
+included_scope:
+  - ""
+excluded_scope:
+  - ""
+acceptance_criteria:
+  - ""
+assumptions:
+  - ""
+
+# Policy:
+# - Never silently edit an approved Seed.
+# - Create v2+ when scope, criteria, or assumptions change.
+# - Verifier reports each acceptance criterion as met / partial / unmet.

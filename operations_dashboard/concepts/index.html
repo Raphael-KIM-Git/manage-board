@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Concepts</title>
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f4f7fb; color: #1f2a3d; }
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 28px 20px 48px; }
+    h1 { margin: 0 0 8px; font-size: 34px; }
+    .sub { margin: 0 0 24px; color: #66768d; }
+    .grid { display: grid; gap: 18px; grid-template-columns: 1fr; }
+    .card { background: white; border: 1px solid #d9e4f0; border-radius: 22px; box-shadow: 0 14px 40px rgba(42,74,122,.08); overflow: hidden; }
+    .head { padding: 18px 20px 8px; }
+    .title { font-size: 22px; font-weight: 800; margin: 0 0 6px; }
+    .desc { font-size: 14px; color: #66768d; margin: 0; }
+    img { display: block; width: 100%; height: auto; background: #eef3f9; }
+    .foot { padding: 14px 20px 20px; font-size: 13px; color: #66768d; }
+    code { background: #f3f6fb; padding: 2px 6px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Dashboard Concept Review</h1>
+    <p class="sub">Raphael님이 비교 선택할 수 있도록 정리한 3개 시안입니다.</p>
+    <div class="grid">
+      <section class="card">
+        <div class="head">
+          <h2 class="title">1. Warm Brief Command</h2>
+          <p class="desc">브리프 작성 중심, 따뜻한 프리미엄 운영 콘솔 톤</p>
+        </div>
+        <img src="./concept-1-warm-brief-command.png" alt="Warm Brief Command" />
+        <div class="foot">업무지시 작성 경험을 가장 중심에 올린 방향</div>
+      </section>
+      <section class="card">
+        <div class="head">
+          <h2 class="title">2. Live Ops Panorama</h2>
+          <p class="desc">워커 활동과 orchestration 흐름이 가장 크게 보이는 운영 상황판</p>
+        </div>
+        <img src="./concept-2-live-ops-panorama.png" alt="Live Ops Panorama" />
+        <div class="foot">가장 다이내믹하고 command center 성격이 강한 방향</div>
+      </section>
+      <section class="card">
+        <div class="head">
+          <h2 class="title">3. Quiet Activation Workspace</h2>
+          <p class="desc">가장 밝고 친절한 activation-first workspace 톤</p>
+        </div>
+        <img src="./concept-3-quiet-activation-workspace.png" alt="Quiet Activation Workspace" />
+        <div class="foot">진입 장벽이 낮고 product workspace 느낌이 강한 방향</div>
+      </section>
+    </div>
+  </div>
+</body>
+</html>
