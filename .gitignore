@@ -55,3 +55,4 @@ operations/.sync.lock
 
 # Local agent-runner state
 .hermes_local_runner.lock
+.worktrees/
