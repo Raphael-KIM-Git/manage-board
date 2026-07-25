@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 
+from operations_dashboard_projection import build_dashboard_summary, project_task
+
 BASE_DIR = Path('/home/raphael/myproject')
 OPERATIONS_DIR = BASE_DIR / 'operations'
 BRIEFS_DIR = OPERATIONS_DIR / 'briefs'
@@ -711,7 +713,7 @@ def build_task_view(task: dict) -> dict:
     seed_files = task_related_files(task_id, SEEDS_DIR)
     stages = task.get('stages') or ([] if task.get('pipeline_name') != 'research-write-verify-finalize' else default_pipeline_stages(task_id, task.get('deliverable', ''), task.get('reviewer', 'HermesVerifier')))
     pipeline = pipeline_summary(stages)
-    return {
+    view = {
         'task_id': task_id,
         'title': task.get('title', ''),
         'objective': task.get('objective', ''),
@@ -743,6 +745,15 @@ def build_task_view(task: dict) -> dict:
         'latest_verification': verification_files[0]['name'] if verification_files else None,
         'latest_digest': digest_files[0]['name'] if digest_files else None,
     }
+    # The legacy field defaults missing pipeline_shape to ``full``.  Feed the
+    # projection a raw-presence-preserving copy so data quality is not lost.
+    projection_input = dict(view)
+    if 'pipeline_shape' not in task:
+        projection_input.pop('pipeline_shape', None)
+    if 'status' not in task:
+        projection_input.pop('status', None)
+    view['dashboard_projection'] = project_task(projection_input)
+    return view
 
 
 def build_agent_summary(tasks: list[dict]) -> list[dict]:
@@ -924,6 +935,7 @@ def build_overview() -> dict:
         'status_counts': status_counts,
         'workers': worker_status_map(),
         'agents': build_agent_summary(tasks),
+        'dashboard_summary': build_dashboard_summary(tasks),
     }
 
 
