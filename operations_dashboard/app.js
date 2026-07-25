@@ -442,7 +442,8 @@ function createTaskCard(task) {
   } else {
     card.append(el('div', 'task-why', task.last_error ? `지금 확인 포인트: ${task.last_error}` : task.objective || '상세 목표 없음'));
   }
-  card.append(renderStageChips(task, isDone));
+  const compactHideGateDetails = task.dashboard_projection?.compact_hide_gate_details ?? isDone;
+  card.append(renderStageChips(task, compactHideGateDetails));
   card.append(renderSeedWorkflow(task));
   if (task.pm_final_review && task.pm_final_review.verdict) {
     const fr = task.pm_final_review;
