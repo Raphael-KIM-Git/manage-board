@@ -236,6 +236,36 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn("live-note-context-item", detail)
         self.assertNotIn("chip live-note-chip", detail)
 
+    def test_responsive_layout_contract_has_three_density_tiers(self):
+        css = (ROOT / "operations_dashboard" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("@media (min-width: 1200px)", css)
+        self.assertIn("@media (min-width: 768px) and (max-width: 1199px)", css)
+        self.assertIn("@media (max-width: 767px)", css)
+        wide = css[css.index("@media (min-width: 1200px)"):css.index("@media (min-width: 768px)")]
+        medium = css[css.index("@media (min-width: 768px)"):css.index("@media (max-width: 767px)")]
+        narrow = css[css.index("@media (max-width: 767px)"):]
+        self.assertIn(".flow-grid { grid-template-columns: repeat(2", wide)
+        self.assertIn(".task-board { grid-template-columns: repeat(3", wide)
+        self.assertIn(".task-board { grid-template-columns: repeat(2", medium)
+        self.assertIn(".flow-grid,", medium)
+        self.assertIn(".task-board,", narrow)
+        self.assertIn(".decision-queue-item", narrow)
+
+    def test_artifact_review_essentials_and_raw_context_have_static_hooks(self):
+        css = (ROOT / "operations_dashboard" / "styles.css").read_text(encoding="utf-8")
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        for hook in ("artifact-review-panel", "artifact-review-block", "artifact-review-binding", "artifact-review-actions"):
+            self.assertIn(hook, css + js)
+        self.assertIn("raw-gate-disclosure", js)
+        self.assertIn('<details id="secondaryAgentContext"', self.source)
+
+    def test_touch_targets_and_status_cues_are_explicit(self):
+        css = (ROOT / "operations_dashboard" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("button,", css)
+        self.assertIn("min-height: 44px", css)
+        for status in (".badge.ok::before", ".badge.wait::before", ".badge.warn::before", ".badge.danger::before"):
+            self.assertIn(status, css)
+
     def test_legacy_write_contracts_and_refresh_semantics_are_preserved(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
         gate = js[js.index("async function gateOverride"):js.index("async function createInterview")]
