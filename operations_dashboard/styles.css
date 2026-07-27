@@ -586,6 +586,18 @@ textarea { resize: vertical; min-height: 110px; }
   margin-bottom: 16px;
 }
 .modal-close-btn { flex-shrink: 0; }
+.task-detail-panel { width: min(980px, calc(100vw - 28px)); }
+.task-detail-body { display: grid; gap: 14px; }
+.task-detail-section { padding: 16px; border: 1px solid rgba(229,217,200,0.96); border-radius: 18px; background: rgba(255,255,255,0.72); }
+.task-detail-section-title { margin: 0 0 10px; font-size: 15px; }
+.task-detail-copy { display: grid; gap: 8px; }
+.task-detail-lead { margin: 0; color: #453a30; line-height: 1.6; white-space: pre-wrap; }
+.task-detail-meta { margin: 0; color: var(--muted); font-size: 12px; }
+.task-detail-stage .stage-track { margin: 0; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.task-detail-list { display: grid; gap: 8px; }
+.task-detail-list .item { text-align: left; }
+.task-detail-authority { margin: 0; font-weight: 750; }
+.artifact-reference { width: 100%; text-align: left; cursor: pointer; }
 .modal-grid {
   display: grid;
   grid-template-columns: 1.08fr 0.92fr;

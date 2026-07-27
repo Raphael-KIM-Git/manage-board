@@ -16,6 +16,7 @@ let pmReviewState = {
   checklist: {},
   interpretation: '',
 };
+let taskDetailReturnFocus = null;
 
 async function getJson(url) {
   const res = await fetch(url);
@@ -297,9 +298,7 @@ function createDecisionQueueItem(task, item) {
   const action = el('button', 'mini-btn decision-queue-action', singlePrimaryAction(item));
   action.type = 'button';
   action.addEventListener('click', () => {
-    document.getElementById('activeWorkBoard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    expandedTasks.add(task.task_id);
-    renderTasks(dashboardState.tasks || []);
+    openTaskDetail(task, action);
   });
   row.append(action);
   return row;
@@ -344,11 +343,13 @@ function renderReviewableArtifacts(tasks) {
   });
   if (!items.length) { root.append(el('div', 'empty', '현재 검토 가능한 산출물이 없습니다.')); return; }
   items.slice(0, 12).forEach(({ task, file, kind }) => {
-    const row = el('div', 'item artifact-reference');
+    const row = el('button', 'item artifact-reference clickable');
+    row.type = 'button';
     const name = typeof file === 'string' ? file : file?.name;
     row.append(el('div', 'item-title', `${kind} · ${name || '이름 없음'}`));
     row.append(el('div', 'item-meta', task.title || task.task_id || '업무 정보 없음'));
     row.append(el('div', 'item-preview', '현재 응답에서 확인된 읽기 전용 근거'));
+    row.addEventListener('click', () => openTaskDetail(task, row));
     root.append(row);
   });
 }
@@ -554,10 +555,13 @@ function createTaskCard(task) {
     extra.classList.toggle('is-collapsed', !nowOpen);
     toggleBtn.textContent = nowOpen ? '간단히 보기' : '상세 보기';
   });
+  const taskDetailBtn = el('button', 'mini-btn', '업무 상세');
+  taskDetailBtn.type = 'button';
+  taskDetailBtn.addEventListener('click', () => openTaskDetail(task, taskDetailBtn));
   const btn = el('button', 'mini-btn', '다시 전송');
   btn.disabled = ['completed', 'cancelled'].includes(task.status);
   btn.addEventListener('click', () => dispatchTask(task.task_id, btn));
-  actionRow.append(toggleBtn);
+  actionRow.append(taskDetailBtn, toggleBtn);
   const detailActions = el('div', 'task-actions task-detail-actions');
   detailActions.append(btn);
   extra.append(detailActions);
@@ -1036,14 +1040,16 @@ function setupModal() {
   document.getElementById('openBriefModalBtn').addEventListener('click', () => setModalOpen(true));
   document.getElementById('closeBriefModalBtn').addEventListener('click', () => setModalOpen(false));
   document.getElementById('closeDetailBtn').addEventListener('click', closeDetail);
+  document.getElementById('closeTaskDetailBtn').addEventListener('click', closeTaskDetail);
   document.addEventListener('click', (event) => {
     if (event.target?.dataset?.closeDetail === 'true') closeDetail();
+    if (event.target?.dataset?.closeTaskDetail === 'true') closeTaskDetail();
   });
   document.getElementById('briefModal').addEventListener('click', (event) => {
     if (event.target?.dataset?.closeModal === 'true') setModalOpen(false);
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { setModalOpen(false); closeDetail(); }
+    if (event.key === 'Escape') { setModalOpen(false); closeDetail(); closeTaskDetail(); }
   });
 }
 
@@ -1177,6 +1183,91 @@ function closeDetail() {
   modal.classList.add('is-hidden');
   modal.setAttribute('aria-hidden', 'true');
   document.getElementById('detailBody').innerHTML = '';
+}
+
+function detailValue(value, fallback = '확인 불가') {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value);
+}
+
+function detailSection(title, className, content) {
+  const section = el('section', `task-detail-section ${className}`);
+  section.append(el('h3', 'task-detail-section-title', title));
+  section.append(content);
+  return section;
+}
+
+function renderTaskDetail(task) {
+  const body = document.getElementById('taskDetailBody');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!task) {
+    body.append(el('p', 'empty', '선택된 업무 정보를 확인할 수 없습니다.'));
+    return;
+  }
+  const projection = taskProjection(task);
+  const outcome = el('div', 'task-detail-copy');
+  outcome.append(el('p', 'task-detail-lead', detailValue(task.objective, '업무 목표 확인 불가')));
+  outcome.append(el('p', 'task-detail-meta', `${humanStatus(task.status)} · ${detailValue(task.updated_at || task.created_at, '시간 확인 불가')}`));
+  body.append(detailSection('Outcome', 'task-detail-outcome', outcome));
+
+  const stage = el('div', 'task-detail-stage');
+  stage.append(renderStageChips(task, true));
+  body.append(detailSection('Stage timeline', 'task-detail-stage-section', stage));
+
+  const artifacts = el('div', 'task-detail-list');
+  const artifactItems = projection.artifact_summary?.items || [];
+  if (!artifactItems.length) artifacts.append(el('p', 'empty', '현재 확인 가능한 산출물이 없습니다.'));
+  artifactItems.forEach((file) => {
+    const name = typeof file === 'string' ? file : file?.name;
+    if (!name) return;
+    const button = el('button', 'item artifact-reference clickable', `결과 · ${name}`);
+    button.type = 'button';
+    button.addEventListener('click', () => openDetail('results', name));
+    artifacts.append(button);
+  });
+  body.append(detailSection('Artifacts', 'task-detail-artifacts', artifacts));
+
+  const verification = el('div', 'task-detail-copy');
+  const verificationSummary = projection.verification_summary || {};
+  verification.append(el('p', 'task-detail-lead', verificationSummary.state === 'not_run' ? '검증 미실행' : detailValue(verificationSummary.state, '검증 상태 확인 불가')));
+  (verificationSummary.items || []).forEach((file) => {
+    const name = typeof file === 'string' ? file : file?.name;
+    if (!name) return;
+    const button = el('button', 'mini-btn subtle-btn', `검증 파일 · ${name}`);
+    button.type = 'button';
+    button.addEventListener('click', () => openDetail('verifications', name));
+    verification.append(button);
+  });
+  body.append(detailSection('Verification', 'task-detail-verification', verification));
+
+  const authority = el('div', 'task-detail-copy');
+  const authorityInfo = authorityPresentation(projection);
+  authority.append(el('p', `task-detail-authority ${authorityInfo.className}`, `현재 권한 상태 · ${authorityInfo.label}`));
+  const audit = projection.audit_rows || [];
+  authority.append(el('p', 'task-detail-meta', audit.length ? `현재 raw 감사 근거 ${audit.length}건` : '현재 raw 감사 근거 없음'));
+  body.append(detailSection('Authority / Audit', 'task-detail-authority-audit', authority));
+}
+
+function openTaskDetail(task, returnFocus) {
+  const modal = document.getElementById('taskDetailModal');
+  if (!modal) return;
+  taskDetailReturnFocus = returnFocus || document.activeElement;
+  document.getElementById('taskDetailTitle').textContent = detailValue(task?.title || task?.task_id, '업무 상세');
+  renderTaskDetail(task);
+  modal.classList.remove('is-hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  document.getElementById('closeTaskDetailBtn')?.focus();
+}
+
+function closeTaskDetail() {
+  const modal = document.getElementById('taskDetailModal');
+  if (!modal) return;
+  modal.classList.add('is-hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  document.getElementById('taskDetailBody').innerHTML = '';
+  if (taskDetailReturnFocus && typeof taskDetailReturnFocus.focus === 'function') taskDetailReturnFocus.focus();
+  taskDetailReturnFocus = null;
 }
 
 // 진행 상황 실시간 반영: 15초 자동 새로고침 (탭이 보일 때만)

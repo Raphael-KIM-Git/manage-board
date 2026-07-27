@@ -206,6 +206,21 @@
     </div>
   </div>
 
+  <div id="taskDetailModal" class="modal-shell is-hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-task-detail="true"></div>
+    <div class="modal-panel task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle" aria-describedby="taskDetailStatus">
+      <div class="modal-head">
+        <div class="detail-head-meta">
+          <p class="section-kicker" id="taskDetailKicker">업무 상세</p>
+          <h2 id="taskDetailTitle">—</h2>
+          <p id="taskDetailStatus" class="hint">현재 raw 근거로 확인되는 읽기 전용 상세입니다.</p>
+        </div>
+        <button id="closeTaskDetailBtn" class="ghost-btn modal-close-btn" type="button">닫기</button>
+      </div>
+      <div id="taskDetailBody" class="task-detail-body"></div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
