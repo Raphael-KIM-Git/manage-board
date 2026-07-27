@@ -22,32 +22,21 @@
       </div>
     </header>
 
-    <section id="missionControlHeader" class="panel mission-control-panel">
-      <div class="section-head">
+    <section class="command-band panel agent-stage">
+      <div class="agent-stage-head">
         <div>
-          <p class="section-kicker">Mission Control</p>
-          <h2>지금 판단할 일</h2>
-          <p class="hint">현재 raw 근거로 확인할 수 있는 흐름만 요약합니다. 확인할 수 없는 상태는 별도로 남깁니다.</p>
-        </div>
-        <div id="missionControlCounts" class="mission-control-counts"></div>
-      </div>
-    </section>
-
-    <section id="decisionQueue" class="panel decision-queue-panel">
-      <div class="section-head">
-        <div>
-          <p class="section-kicker">Decision Queue</p>
-          <h2>먼저 판단할 일</h2>
-          <p class="hint">보류·최종 검토·검증 근거 순서로, 실제 증거가 있는 항목만 보여줍니다.</p>
+          <p class="section-kicker">전체 에이전트 보드</p>
+          <h2>Agent Stage</h2>
+          <p class="hint">카드보다 더 가볍게, 각 에이전트가 지금 움직이는지·막혔는지·검토 중인지 한눈에 보이도록 정리합니다.</p>
         </div>
       </div>
-      <div id="decisionQueueList" class="decision-queue-list"></div>
+      <div id="agentBoard" class="agent-world"></div>
     </section>
 
-    <section id="activeWorkBoard" class="panel decision-panel">
+    <section class="panel decision-panel">
       <div class="section-head">
         <div>
-          <p class="section-kicker">Active Work Board</p>
+          <p class="section-kicker">우선 판단할 흐름</p>
           <h2>업무 보드</h2>
           <p class="hint">최근순이 아니라 지금 개입이 필요한 순서대로 정리됩니다.</p>
         </div>
@@ -56,22 +45,40 @@
       <div id="taskBoard" class="task-board"></div>
     </section>
 
-    <section id="reviewableArtifacts" class="panel reviewable-artifacts-panel">
-      <div class="section-head"><div><p class="section-kicker">Reviewable Artifacts</p><h2>검토 가능한 산출물</h2><p class="hint">현재 응답에서 확인되는 결과·검증 파일만 모아 봅니다.</p></div></div>
-      <div id="reviewableArtifactsList" class="item-list compact"></div>
-    </section>
-
-    <section id="recentAudit" class="flow-grid">
+    <section class="flow-grid">
       <div class="panel timeline-panel">
-        <div class="section-head"><div><p class="section-kicker">최근 흐름</p><h2>결과와 검토</h2><p class="hint">에이전트가 남긴 결과와 검토 메모를 시간 흐름으로 읽을 수 있습니다.</p></div></div>
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">최근 흐름</p>
+            <h2>결과와 검토</h2>
+            <p class="hint">에이전트가 남긴 결과와 검토 메모를 시간 흐름으로 읽을 수 있습니다.</p>
+          </div>
+        </div>
         <div id="recentFlow" class="timeline"></div>
       </div>
+
       <div class="side-stack">
-        <div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">도착한 결과</p><h2>최근 산출물</h2></div></div><div id="resultsList" class="item-list compact"></div></div>
-        <div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">운영 기록</p><h2>다이제스트</h2></div></div><div id="digestsList" class="item-list compact"></div></div>
+        <div class="panel side-panel">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">도착한 결과</p>
+              <h2>최근 산출물</h2>
+            </div>
+          </div>
+          <div id="resultsList" class="item-list compact"></div>
+        </div>
+
+        <div class="panel side-panel">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">운영 기록</p>
+              <h2>다이제스트</h2>
+            </div>
+          </div>
+          <div id="digestsList" class="item-list compact"></div>
+        </div>
       </div>
     </section>
-
   </div>
 
   <div id="briefModal" class="modal-shell is-hidden" aria-hidden="true">
