@@ -81,7 +81,7 @@ class DashboardStaticContractTests(unittest.TestCase):
         positions = [card.index(marker) for marker in order]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("extra.append(renderSeedWorkflow(task))", card)
-        self.assertIn("extra.append(liveWrap)", card)
+        self.assertNotIn("live-note-row", card)
         self.assertNotIn("card.append(renderSeedWorkflow(task))", card)
         self.assertNotIn("card.append(liveWrap)", card)
         self.assertIn("extra.append(renderStageChips(task, compactHideGateDetails))", card)
@@ -157,16 +157,18 @@ class DashboardStaticContractTests(unittest.TestCase):
 
     def test_raw_gate_audit_has_required_fields_and_safe_semantics(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
-        audit = js[js.index("function rawGateValue"):js.index("function renderTaskDetail")]
+        raw = js[js.index("function rawGateValue"):js.index("function renderScopedGateControls")]
+        gate_label = js[js.index("function rawGateLabel"):js.index("function rawGateDecisionLabel")]
+        audit = js[js.index("function renderRawGateAudit"):js.index("function renderTaskDetail")]
         for field in ("source", "value", "scope", "reason", "time", "actor", "correlation", "version"):
-            self.assertIn(f"['{field}'", audit)
+            self.assertIn(f"['{field}'", raw + audit)
         self.assertIn("원시 게이트 이력", audit)
         self.assertNotIn("GATE1.5", audit)
-        self.assertIn("결정 없음", audit)
+        self.assertIn("결정 없음", js)
         self.assertNotIn("normalized_decision", audit)
         self.assertNotIn("승인·진행", audit)
         self.assertNotIn("gate_id", audit)
-        self.assertIn("근거 ${index + 1}", audit)
+        self.assertIn("근거 ${index + 1}", gate_label)
         self.assertIn("현재 원시 게이트 근거 없음", audit)
         self.assertIn("audit.source_mechanism || audit.source", audit)
 
@@ -211,10 +213,44 @@ class DashboardStaticContractTests(unittest.TestCase):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
         self.assertIn("fetch('/api/final-review'", js)
         self.assertIn("JSON.stringify({ task_id: taskId, action })", js)
-        self.assertEqual(js.count("최종 검토 override 요청"), 2)
-        self.assertEqual(js.count("재작업 override 요청"), 2)
+        self.assertEqual(js.count("최종 검토 override 요청"), 1)
+        self.assertEqual(js.count("재작업 override 요청"), 1)
         self.assertIn("await loadDashboard();", js[js.index("async function finalReviewOverride"):js.index("async function gateOverride")])
         self.assertNotIn("이대로 승인", js)
+
+    def test_scoped_controls_are_rendered_only_in_task_detail(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        chips = js[js.index("function renderStageChips"):js.index("const RESULT_WORKER_ORDER")]
+        detail = js[js.index("function renderTaskStageTimeline"):js.index("function rawGateValue")]
+        self.assertNotIn("gateOverride(", chips)
+        self.assertIn("renderScopedGateControls(task, stage)", detail)
+        self.assertIn("stage.status === 'entry_hold'", js)
+        self.assertIn("stage.status === 'gate_hold'", js)
+
+    def test_live_note_is_detail_context_not_decision_chip(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        card = js[js.index("function createTaskCard(task)"):js.index("function renderTasks(tasks)")]
+        detail = js[js.index("function renderTaskLiveNoteContext"):js.index("function rawGateLabel")]
+        self.assertNotIn("live-note-row", card)
+        self.assertIn("task-detail-live-context", detail)
+        self.assertIn("live-note-context-item", detail)
+        self.assertNotIn("chip live-note-chip", detail)
+
+    def test_legacy_write_contracts_and_refresh_semantics_are_preserved(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        gate = js[js.index("async function gateOverride"):js.index("async function createInterview")]
+        final = js[js.index("async function finalReviewOverride"):js.index("async function gateOverride")]
+        live = js[js.index("async function submitLiveNote"):js.index("function shortPreview")]
+        self.assertIn("fetch('/api/gate-override'", gate)
+        self.assertIn("{ task_id: taskId, stage_id: stageId, action }", gate)
+        self.assertIn("await loadDashboard();", gate)
+        self.assertIn("fetch('/api/final-review'", final)
+        self.assertIn("{ task_id: taskId, action }", final)
+        self.assertIn("await loadDashboard();", final)
+        self.assertIn("fetch('/api/live-note'", live)
+        self.assertIn("{ task_id: taskId, note }", live)
+        self.assertNotIn("approved =", js)
+        self.assertNotIn("final = true", js)
 
 
 if __name__ == "__main__":

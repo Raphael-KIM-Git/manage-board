@@ -968,6 +968,9 @@ a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
 }
 .live-note-input:focus { outline: none; border-color: #7d66ba; }
 .live-note-pending { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-detail-live-context { padding: 16px; border: 1px solid rgba(125, 102, 186, 0.22); border-radius: 18px; background: rgba(248, 245, 255, 0.72); }
+.task-detail-live-context .task-detail-section-title { margin-bottom: 6px; }
+.live-note-context-item { margin: 0; padding: 8px 10px; border-left: 3px solid #7d66ba; color: #5d4d83; background: rgba(125, 102, 186, 0.08); line-height: 1.45; }
 .chip.live-note-chip {
   background: rgba(125, 102, 186, 0.12);
   color: #6a549f;
