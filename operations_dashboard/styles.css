@@ -755,6 +755,12 @@ textarea { resize: vertical; min-height: 110px; }
   font-size: 11px;
   font-weight: 700;
 }
+.badge::before { display: inline-block; font-size: 12px; line-height: 1; }
+.badge.ok::before { content: '✓'; }
+.badge.wait::before { content: '◷'; }
+.badge.warn::before { content: '!'; }
+.badge.danger::before { content: '×'; }
+.badge.violet::before { content: '◇'; }
 .badge.ok { background: var(--success-soft); color: var(--success); }
 .badge.wait { background: var(--accent-soft); color: var(--accent); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
@@ -773,32 +779,47 @@ textarea { resize: vertical; min-height: 110px; }
   100% { box-shadow: 0 0 0 0 rgba(125,102,186,0); }
 }
 
-@media (max-width: 1220px) {
-  .flow-grid,
-  .task-board,
-  .modal-grid {
-    grid-template-columns: 1fr;
-  }
+/* Responsive contract: queue first, board second, review/audit last. */
+@media (min-width: 1200px) {
+  .flow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .reviewable-artifacts-panel .item-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-@media (max-width: 920px) {
-  .shell { padding: 20px 14px 36px; }
+@media (min-width: 768px) and (max-width: 1199px) {
+  .shell { padding: 22px 18px 42px; }
+  .task-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .flow-grid,
+  .modal-grid,
+  .secondary-context-grid { grid-template-columns: 1fr; }
+  .reviewable-artifacts-panel .item-list { grid-template-columns: 1fr; }
   .hero,
   .section-head,
   .task-head,
   .option-bar,
-  .modal-head {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+  .modal-head { flex-wrap: wrap; }
+}
+
+@media (max-width: 767px) {
+  .shell { padding: 16px 12px 32px; }
+  .hero,
+  .section-head,
+  .task-head,
+  .option-bar,
+  .modal-head { flex-direction: column; align-items: stretch; }
+  .hero-actions { display: grid; grid-template-columns: 1fr; }
+  .hero-actions > button { width: 100%; }
+  .task-board,
+  .flow-grid,
+  .modal-grid,
   .two-col,
   .artifact-ref,
-  .secondary-context-grid {
-    grid-template-columns: 1fr;
-  }
-  .stage-track {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  .secondary-context-grid { grid-template-columns: 1fr; }
+  .decision-queue-item { align-items: stretch; flex-direction: column; }
+  .decision-queue-action,
+  .decision-queue-action > button { width: 100%; }
+  .stage-track { grid-template-columns: 1fr; }
+  .stage-timeline-summary-row { grid-template-columns: 1fr; gap: 5px; }
   .modal-panel {
     width: calc(100vw - 16px);
     margin: 8px auto;
@@ -806,6 +827,24 @@ textarea { resize: vertical; min-height: 110px; }
     padding: 14px;
   }
 }
+
+/* Keep review essentials visible; lower-priority raw context remains disclosure-based. */
+.artifact-review-panel,
+.artifact-review-block,
+.artifact-review-binding,
+.artifact-review-actions { min-width: 0; }
+.artifact-review-panel .artifact-review-binding,
+.artifact-review-panel .artifact-review-actions { display: grid; }
+
+/* Interactive controls meet the 44px minimum without changing compact text chips. */
+button,
+a.mini-btn,
+.gate-btn,
+.artifact-reference,
+.raw-gate-disclosure summary,
+.secondary-context summary { min-height: 44px; }
+.raw-gate-disclosure summary,
+.secondary-context summary { display: flex; align-items: center; }
 
 
 
