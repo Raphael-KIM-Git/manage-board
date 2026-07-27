@@ -40,13 +40,36 @@ function badgeClass(status) {
 
 function pipelineShapeLabel(shape) {
   const map = {
-    full: '전체 공정',
+    full: '조사→작성→검증→최종본',
     write_verify: '작성→검증',
     research_verify: '조사→검증',
     analyze_verify: '분석→검증',
     research_only: '조사만',
   };
   return map[shape] || shape;
+}
+
+function dataQualityLabel(item) {
+  const labels = { missing: '정보 없음', null: '값 비어 있음', unknown: '알 수 없는 값', artifact_ambiguous: '산출물 대상 불명확', conflict: '근거 충돌', scope_missing: '범위 확인 필요' };
+  if (!item) return '확인 불가';
+  return labels[item.kind] || item.kind || '확인 불가';
+}
+
+function authorityPresentation(projection) {
+  const authority = projection?.authority_summary;
+  if (!authority) return { label: '현재 데이터에서 확인 불가', className: 'authority-unknown' };
+  if (authority.effective_final_approved === true) return { label: '현재 raw 근거로 검토 완료', className: 'authority-evidence' };
+  return { label: authority.label || '결정 없음', className: 'authority-unknown' };
+}
+
+function pipelineShapePresentation(task) {
+  const shape = task.dashboard_projection?.pipeline_shape;
+  if (!shape) return { label: pipelineShapeLabel(task.pipeline_shape), className: 'pipeline-unknown' };
+  return { label: shape.label, className: `pipeline-${shape.confidence || 'unknown'}` };
+}
+
+function singlePrimaryAction(item) {
+  return item?.primary_action || '상세 보기';
 }
 
 function humanStatus(status) {
@@ -74,144 +97,6 @@ function humanStatus(status) {
     needs_pm_review: 'PM 검토 필요',
   };
   return map[status] || status;
-}
-
-function agentTone(agent) {
-  if (['needs_config', 'rate_limited'].includes(agent.availability) || agent.blocked_count > 0) return 'blocked';
-  if (agent.review_count > 0) return 'review';
-  if (agent.active_count > 0) return 'active';
-  if (agent.completed_count > 0) return 'completed';
-  return 'idle';
-}
-
-function agentStateLabel(agent) {
-  if (agent.availability === 'needs_config') return '설정 필요';
-  if (agent.availability === 'rate_limited') return '세션 제한';
-  if (agent.blocked_count > 0) return '막힘';
-  if (agent.review_count > 0) return '검토 중';
-  if (agent.active_count > 0) return '진행 중';
-  if (agent.completed_count > 0) return '완료됨';
-  return '대기';
-}
-
-function agentZone(agent) {
-  if (agent.kind === 'hub' || agent.kind === 'orchestrator' || agent.kind === 'planner') return 'command';
-  if (agent.kind === 'reviewer' || agent.name === 'verify-co' || agent.name === 'HermesVerifier') return 'review';
-  if (agent.name === 'writer-co' || agent.kind === 'designer' || agent.kind === 'developer') return 'write';
-  return 'research';
-}
-
-function agentGlyph(agent) {
-  if (agent.kind === 'hub') return '⌘';
-  if (agent.kind === 'orchestrator') return 'PM';
-  if (agent.kind === 'planner') return 'PL';
-  if (agent.kind === 'designer') return 'DS';
-  if (agent.kind === 'developer') return 'DE';
-  if (agent.kind === 'reviewer') return 'VF';
-  if (agent.kind === 'researcher') return 'RS';
-  if (agent.name === 'writer-co') return 'WR';
-  if (agent.name === 'researcher-co') return 'CL';
-  if (agent.name === 'researcher_agent') return 'OC';
-  return (agent.name || 'AG').replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase() || 'AG';
-}
-
-function agentPersonaClass(agent) {
-  if (agent.kind === 'hub') return 'persona-hub';
-  if (agent.kind === 'orchestrator') return 'persona-pm';
-  if (agent.kind === 'planner') return 'persona-planner';
-  if (agent.kind === 'designer') return 'persona-design';
-  if (agent.kind === 'developer') return 'persona-developer';
-  if (agent.kind === 'reviewer' || agent.name === 'verify-co') return 'persona-review';
-  if (agent.name === 'writer-co') return 'persona-writer';
-  return 'persona-research';
-}
-
-function renderAgents(agents, tasks = []) {
-  const root = document.getElementById('agentBoard');
-  root.innerHTML = '';
-
-  const zones = {
-    command: { title: '지휘 / 조율', hint: 'PM, 허브, 계획 계열', items: [] },
-    research: { title: '조사 / 실행', hint: '연구와 자료 수집', items: [] },
-    write: { title: '작성', hint: '초안과 최종 정리', items: [] },
-    review: { title: '검토 / 판정', hint: '검증과 승인', items: [] },
-  };
-
-  agents.forEach((agent) => zones[agentZone(agent)].items.push(agent));
-
-  Object.values(zones).forEach((zone) => {
-    const section = el('section', 'agent-zone');
-    const head = el('div', 'agent-zone-head');
-    head.append(el('div', 'agent-zone-title', zone.title));
-    head.append(el('div', 'agent-zone-hint', zone.hint));
-    section.append(head);
-
-    const grid = el('div', 'agent-character-grid');
-    if (!zone.items.length) {
-      grid.append(el('div', 'empty', '현재 표시할 에이전트가 없습니다.'));
-    } else {
-      zone.items.forEach((agent) => {
-        const tone = agentTone(agent);
-        const item = el('button', `agent-character ${tone} ${agentPersonaClass(agent)}`);
-        item.type = 'button';
-        item.title = agent.latest_task_title
-          ? `${agent.name} · ${agentStateLabel(agent)} · 최근 연결: ${agent.latest_task_title}`
-          : `${agent.name} · ${agentStateLabel(agent)}`;
-
-        const avatar = el('div', 'agent-character-avatar');
-        avatar.append(el('span', 'agent-character-glyph', agentGlyph(agent)));
-        avatar.append(el('span', `agent-status-orb ${tone}`));
-
-        const meta = el('div', 'agent-character-meta');
-        meta.append(el('div', 'agent-character-name', agent.name));
-        meta.append(el('div', 'agent-character-state', agentStateLabel(agent)));
-
-        item.append(avatar);
-        item.append(meta);
-        grid.append(item);
-      });
-    }
-
-    section.append(grid);
-    root.append(section);
-  });
-
-  const active = [];
-  (tasks || []).forEach((task) => {
-    (task.stages || []).forEach((stage) => {
-      if (['in_progress', 'gate_hold', 'entry_hold'].includes(stage.status)) {
-        const workers = stage.dispatched_workers?.length ? stage.dispatched_workers : (stage.agents || []);
-        active.push({ stage: stage.label || stage.id, task: task.title, workers });
-      }
-    });
-  });
-
-  const center = el('div', 'agent-stage-center');
-  const centerRing = el('div', 'agent-stage-center-ring');
-  const centerCore = el('div', 'agent-stage-center-core');
-  centerCore.append(el('div', 'agent-stage-center-kicker', '지금 진행 중'));
-  centerCore.append(el('div', 'agent-stage-center-title', active[0]?.stage || '대기 중'));
-  centerCore.append(el('div', 'agent-stage-center-status', active.length ? '활성 stage' : '진행 중인 stage 없음'));
-  if (active[0]?.workers?.length) {
-    const amap = {};
-    agents.forEach((ag) => { amap[ag.name] = ag; });
-    const chipRow = el('div', 'agent-stage-center-workers');
-    active[0].workers.slice(0, 3).forEach((name) => {
-      const agent = amap[name] || { name, kind: 'worker' };
-      const chip = el('div', `agent-stage-center-worker ${agentPersonaClass(agent)}`);
-      const av = el('div', 'agent-character-avatar center-mini');
-      av.append(el('span', 'agent-character-glyph', agentGlyph(agent)));
-      av.append(el('span', 'agent-status-orb active'));
-      chip.append(av);
-      chip.append(el('div', 'agent-stage-center-worker-name', name));
-      chipRow.append(chip);
-    });
-    centerCore.append(chipRow);
-  }
-  if (active[0]?.task) centerCore.append(el('div', 'agent-stage-center-task', active[0].task));
-  centerRing.append(centerCore);
-  center.append(centerRing);
-  root.append(center);
 }
 
 function taskSortWeight(task) {
@@ -376,6 +261,97 @@ function renderWorkerResults(task) {
   return wrap;
 }
 
+function fallbackProjection(task) {
+  const status = task.status;
+  const group = ['completed', 'cancelled'].includes(status) ? 'done' : ['blocked', 'dispatch_blocked', 'dispatch_failed'].includes(status) ? 'blocked' : 'unknown';
+  const artifacts = task.result_files?.length || task.verification_files?.length;
+  return {
+    work_group: group,
+    decision_queue_item: artifacts ? { kind: 'reviewable', question: '검토 가능한 파일이 있습니다', scope: 'unknown', primary_action: '산출물 검토' } : null,
+    artifact_summary: { state: task.result_files?.length ? 'available' : 'none', items: task.result_files || [] },
+    verification_summary: { state: task.verification_files?.length ? 'available_unstructured' : 'not_run', items: task.verification_files || [] },
+    authority_summary: { effective_final_approved: false, label: '현재 데이터에서 확인 불가' },
+    data_quality: [{ kind: 'missing', field: 'dashboard_projection' }],
+  };
+}
+
+function createDecisionQueueItem(task, item) {
+  const row = el('article', `decision-queue-item queue-${item.kind || 'unknown'}`);
+  const copy = el('div', 'decision-queue-copy');
+  copy.append(el('div', 'decision-queue-question', item.question || '확인할 근거가 있습니다'));
+  copy.append(el('div', 'decision-queue-task', task.title || task.task_id || '제목 없음'));
+  const evidence = [];
+  if (item.scope) evidence.push(`범위: ${item.scope}`);
+  if (item.reason) evidence.push(`이유: ${item.reason}`);
+  const projection = task.dashboard_projection || fallbackProjection(task);
+  const artifact = projection.artifact_summary;
+  if (artifact?.latest?.name) evidence.push(`산출물: ${artifact.latest.name}`);
+  else if (artifact?.state === 'ambiguous') evidence.push('산출물: 후보 여러 개');
+  const verification = projection.verification_summary;
+  if (verification?.state === 'not_run') evidence.push('검증: 미실행');
+  else if (verification?.state) evidence.push('검증 근거 있음');
+  if (evidence.length) copy.append(el('div', 'decision-queue-evidence', evidence.join(' · ')));
+  const quality = (projection.data_quality || []).slice(0, 2);
+  if (quality.length) copy.append(el('div', 'data-quality-note', quality.map(dataQualityLabel).join(' · ')));
+  row.append(copy);
+  const action = el('button', 'mini-btn decision-queue-action', singlePrimaryAction(item));
+  action.type = 'button';
+  action.addEventListener('click', () => {
+    document.getElementById('activeWorkBoard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    expandedTasks.add(task.task_id);
+    renderTasks(dashboardState.tasks || []);
+  });
+  row.append(action);
+  return row;
+}
+
+function renderMissionControl(summary, tasks = []) {
+  const root = document.getElementById('missionControlCounts');
+  if (!root) return;
+  root.innerHTML = '';
+  const counts = summary?.counts || {};
+  [['decision_needed', '판단 필요'], ['active', '진행 중'], ['reviewable', '검토 가능'], ['blocked', '막힘'], ['unknown', '확인 불가']].forEach(([key, label]) => {
+    const item = el('div', `mission-count mission-count-${key}`);
+    item.append(el('strong', 'mission-count-value', String(counts[key] ?? 0)));
+    item.append(el('span', 'mission-count-label', label));
+    root.append(item);
+  });
+}
+
+function renderDecisionQueue(tasks) {
+  const root = document.getElementById('decisionQueueList');
+  if (!root) return;
+  root.innerHTML = '';
+  const queue = (tasks || []).map((task) => ({ task, item: task.dashboard_projection?.decision_queue_item || fallbackProjection(task).decision_queue_item }))
+    .filter(({ item }) => item)
+    .sort((a, b) => ({ active_hold: 1, final_review: 2, reviewable: 3 }[a.item.kind] || 9) - ({ active_hold: 1, final_review: 2, reviewable: 3 }[b.item.kind] || 9));
+  if (!queue.length) {
+    root.append(el('div', 'empty decision-queue-empty', '지금 확인이 필요한 결정 항목이 없습니다. 새로운 근거가 도착하면 여기에 표시됩니다.'));
+    return;
+  }
+  queue.forEach(({ task, item }) => root.append(createDecisionQueueItem(task, item)));
+}
+
+function renderReviewableArtifacts(tasks) {
+  const root = document.getElementById('reviewableArtifactsList');
+  if (!root) return;
+  root.innerHTML = '';
+  const items = [];
+  (tasks || []).forEach((task) => {
+    const projection = task.dashboard_projection || fallbackProjection(task);
+    (projection.artifact_summary?.items || []).forEach((file) => items.push({ task, file, kind: '결과' }));
+    (projection.verification_summary?.items || []).forEach((file) => items.push({ task, file, kind: '검증' }));
+  });
+  if (!items.length) { root.append(el('div', 'empty', '현재 검토 가능한 산출물이 없습니다.')); return; }
+  items.slice(0, 12).forEach(({ task, file, kind }) => {
+    const row = el('div', 'item artifact-reference');
+    row.append(el('div', 'item-title', `${kind} · ${file.name || '이름 없음'}`));
+    row.append(el('div', 'item-meta', task.title || task.task_id));
+    if (file.modified_at) row.append(el('div', 'item-preview', file.modified_at));
+    root.append(row);
+  });
+}
+
 function renderTaskSummary(tasks) {
   const root = document.getElementById('taskSummary');
   const blocked = tasks.filter((task) => ['dispatch_blocked', 'dispatch_failed', 'blocked'].includes(task.status)).length;
@@ -430,9 +406,10 @@ function createTaskCard(task) {
   titleWrap.append(el('div', 'task-title', task.title));
   titleWrap.append(el('div', 'task-submeta', `${humanStatus(task.status)} · ${task.updated_at || task.created_at}`));
   head.append(titleWrap);
-  if (task.pipeline_shape && task.pipeline_shape !== 'full') {
-    head.append(el('span', 'badge badge-pipe', pipelineShapeLabel(task.pipeline_shape)));
-  }
+  const pipeline = pipelineShapePresentation(task);
+  if (pipeline.label) head.append(el('span', `badge badge-pipe ${pipeline.className}`, pipeline.label));
+  const authority = authorityPresentation(task.dashboard_projection);
+  head.append(el('span', `data-authority ${authority.className}`, `◉ ${authority.label}`));
   head.append(el('span', `badge ${badgeClass(task.status)}`, humanStatus(task.status)));
   card.append(head);
 
@@ -925,7 +902,9 @@ async function loadDashboard() {
   ]);
 
   dashboardState = { overview, tasks, results, verifications, digests };
-  renderAgents(overview.agents || [], tasks || []);
+  renderMissionControl(overview.dashboard_summary, tasks || []);
+  renderDecisionQueue(tasks || []);
+  renderReviewableArtifacts(tasks || []);
   renderTasks(tasks || []);
   renderRecentFlow(results || [], verifications || [], digests || []);
   renderSimpleList('resultsList', results || []);

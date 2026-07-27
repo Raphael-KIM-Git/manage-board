@@ -89,11 +89,33 @@ h1 {
   border: 1px solid rgba(229, 217, 200, 0.9);
   border-radius: 22px;
 }
-.command-band {
-  padding: 22px;
-  margin-bottom: 18px;
-}
-.agent-stage-head { margin-bottom: 18px; }
+.mission-control-panel,
+.decision-queue-panel,
+.reviewable-artifacts-panel { padding: 22px; margin-bottom: 18px; }
+.mission-control-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.mission-count { min-width: 82px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-soft); text-align: center; }
+.mission-count-value { display: block; font-size: 22px; line-height: 1; }
+.mission-count-label { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.mission-count-decision_needed { background: var(--warm-soft); border-color: #f0c7b2; }
+.mission-count-blocked { background: var(--danger-soft); border-color: #edc1b1; }
+.mission-count-unknown { background: #f0ede8; }
+.decision-queue-list { display: grid; gap: 10px; }
+.decision-queue-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 16px; border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: var(--radius-md); background: var(--panel); }
+.queue-active_hold { border-left-color: var(--danger); background: var(--danger-soft); }
+.queue-final_review { border-left-color: var(--warn); background: var(--warn-soft); }
+.queue-reviewable { border-left-color: var(--violet); background: var(--violet-soft); }
+.decision-queue-copy { min-width: 0; }
+.decision-queue-question { font-weight: 850; }
+.decision-queue-task { margin-top: 4px; color: var(--text); font-size: 13px; }
+.decision-queue-evidence, .data-quality-note { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.data-quality-note { color: #896d45; }
+.decision-queue-action { flex: 0 0 auto; }
+.data-authority { display: inline-flex; align-items: center; padding: 5px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.authority-evidence { color: var(--success); background: var(--success-soft); }
+.authority-unknown { color: var(--muted); background: #f5f1eb; }
+.pipeline-direct { background: var(--accent-soft); }
+.pipeline-ambiguous, .pipeline-unavailable { background: #f3eee6; color: var(--muted); }
+.reviewable-artifacts-panel .item-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .section-kicker {
   margin: 0 0 8px;
   font-size: 12px;
@@ -102,7 +124,6 @@ h1 {
   color: var(--muted);
   font-weight: 700;
 }
-.agent-stage-head h2,
 .section-head h2,
 .modal-head h2,
 .artifact-bank-head h3 {
@@ -117,172 +138,6 @@ h1 {
   line-height: 1.6;
 }
 
-.agent-world {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  min-height: 570px;
-  padding: 12px;
-}
-.agent-stage-center {
-  position: absolute;
-  z-index: 4;
-  left: 50%;
-  top: 50%;
-  width: 280px;
-  height: 230px;
-  transform: translate(-50%, -50%);
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-}
-.agent-stage-center-ring {
-  width: 100%;
-  height: 100%;
-  padding: 9px;
-  border-radius: 42px;
-  background: conic-gradient(var(--accent) 0 28%, #d9e2ff 28% 100%);
-  box-shadow: 0 18px 42px rgba(79,121,216,0.2), 0 0 0 9px rgba(255,253,249,0.94);
-}
-.agent-stage-center-core {
-  width: 100%;
-  height: 100%;
-  border-radius: 34px;
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 6px;
-  padding: 28px;
-  text-align: center;
-  background: rgba(255,253,249,0.98);
-  border: 1px solid rgba(215,224,255,0.92);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.98);
-}
-.agent-stage-center-kicker {
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.agent-stage-center-title {
-  max-width: 160px;
-  color: var(--text);
-  font-size: 21px;
-  font-weight: 900;
-  line-height: 1.05;
-}
-.agent-stage-center-status {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 800;
-}
-.agent-stage-center-agents,
-.agent-stage-center-task {
-  max-width: 170px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-stage-center-task { color: #9a8a7a; }
-.agent-zone {
-  padding: 14px;
-  border-radius: 22px;
-  background: linear-gradient(180deg, rgba(255,251,245,0.96), rgba(247,240,231,0.96));
-  border: 1px solid rgba(229, 217, 200, 0.96);
-}
-.agent-zone-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.agent-zone-title {
-  font-size: 15px;
-  font-weight: 800;
-}
-.agent-zone-hint {
-  font-size: 12px;
-  color: var(--muted);
-}
-.agent-character-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-  gap: 12px;
-}
-.agent-character {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 10px 8px;
-  border-radius: 18px;
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  min-height: 126px;
-}
-.agent-character:hover {
-  background: rgba(255,255,255,0.5);
-}
-.agent-character-avatar {
-  position: relative;
-  width: 68px;
-  height: 68px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(255,255,255,0.84);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.54), 0 10px 20px rgba(85, 62, 40, 0.05);
-}
-.agent-character-glyph {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-}
-.agent-status-orb {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  border: 2px solid rgba(255,255,255,0.95);
-  background: #bdb2a4;
-}
-.agent-status-orb.active { background: var(--accent); box-shadow: 0 0 0 0 rgba(79,121,216,0.26); animation: pulse 1.8s infinite; }
-.agent-status-orb.review { background: var(--violet); box-shadow: 0 0 0 0 rgba(125,102,186,0.22); animation: pulseViolet 2s infinite; }
-.agent-status-orb.blocked { background: var(--danger); }
-.agent-status-orb.completed { background: var(--success); }
-.agent-status-orb.idle { background: #a08e7e; }
-.agent-character-meta {
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  min-width: 0;
-}
-.agent-character-name {
-  font-size: 12px;
-  font-weight: 800;
-  text-align: center;
-  word-break: break-word;
-}
-.agent-character-state {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-}
-.persona-hub .agent-character-avatar { background: linear-gradient(135deg, #dce8ff, #f5f8ff); color: #3459b3; }
-.persona-pm .agent-character-avatar { background: linear-gradient(135deg, #e7ecff, #fff8ef); color: #4e60b5; }
-.persona-planner .agent-character-avatar { background: linear-gradient(135deg, #efe8ff, #fbf7ff); color: #6f57b1; }
-.persona-design .agent-character-avatar { background: linear-gradient(135deg, #ffe8ef, #fff7fb); color: #c05a86; }
-.persona-developer .agent-character-avatar { background: linear-gradient(135deg, #e2f0ff, #f7fbff); color: #2f6fae; }
-.persona-review .agent-character-avatar { background: linear-gradient(135deg, #e7fbf2, #f8fffc); color: #2e8c67; }
-.persona-writer .agent-character-avatar { background: linear-gradient(135deg, #fff5dc, #fffdf2); color: #9c6b16; }
-.persona-research .agent-character-avatar { background: linear-gradient(135deg, #fff1e6, #fff9f2); color: #b96d41; }
 
 .decision-panel {
   padding: 22px;
@@ -891,10 +746,6 @@ textarea { resize: vertical; min-height: 110px; }
   .stage-track {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .agent-world { gap: 12px; }
-  .agent-character-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .agent-stage-center { width: 230px; height: 190px; }
-  .agent-stage-center-core { padding: 22px; }
   .modal-panel {
     width: calc(100vw - 16px);
     margin: 8px auto;
@@ -962,79 +813,6 @@ textarea { resize: vertical; min-height: 110px; }
   color: white;
 }
 
-/* ===== Agent Stage: compact agents + enlarged center stage ===== */
-.command-band { padding: 26px; }
-.agent-character-grid { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
-.agent-character { min-height: 118px; padding: 8px 7px; }
-.agent-character-avatar { width: 64px; height: 64px; }
-.agent-character-glyph { font-size: 18px; }
-.agent-status-orb { width: 15px; height: 15px; }
-.agent-character-name { font-size: 12px; }
-.agent-character-state { font-size: 11px; }
-.agent-zone-title { font-size: 16px; }
-.agent-zone { padding: 14px; }
-
-/* ===== 중앙 카드 겹침 방지: 디자인 유지, 에이전트만 존 바깥쪽으로 정렬 ===== */
-/* 카드 폭 고정(1fr 스트레치 제거) → 중앙 방향으로 늘어나지 않음 */
-.agent-character-grid { grid-template-columns: repeat(auto-fit, 118px); gap: 10px; }
-/* 각 존에서 중앙 반대편(바깥 모서리)으로 붙이고, 중앙 쪽엔 안전 여백 확보 */
-.agent-world > .agent-zone:nth-child(1) .agent-character-grid { justify-content: start; padding-right: 155px; }
-.agent-world > .agent-zone:nth-child(2) .agent-character-grid { justify-content: end; padding-left: 155px; }
-.agent-world > .agent-zone:nth-child(3) .agent-character-grid { justify-content: start; padding-right: 155px; }
-.agent-world > .agent-zone:nth-child(4) .agent-character-grid { justify-content: end; padding-left: 155px; }
-/* 태블릿에서도 중앙 stage가 agent를 가리지 않도록 축소된 안전 여백 유지 */
-@media (max-width: 1220px) {
-  .agent-character-grid { grid-template-columns: repeat(auto-fit, 104px); }
-  .agent-world > .agent-zone:nth-child(1) .agent-character-grid,
-  .agent-world > .agent-zone:nth-child(3) .agent-character-grid {
-    justify-content: start;
-    padding-left: 0;
-    padding-right: 130px;
-  }
-  .agent-world > .agent-zone:nth-child(2) .agent-character-grid,
-  .agent-world > .agent-zone:nth-child(4) .agent-character-grid {
-    justify-content: end;
-    padding-left: 130px;
-    padding-right: 0;
-  }
-}
-@media (max-width: 720px) {
-  .agent-stage { overflow-x: auto; }
-  .agent-world { min-width: 700px; }
-}
-
-/* ===== 실시간 진행: 중앙 워커 칩 + 클릭 가능한 결과 ===== */
-.agent-stage-center-workers {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-  margin-top: 4px;
-}
-.agent-stage-center-worker {
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  animation: centerEnter 0.5s ease-out;
-}
-.agent-stage-center-worker .agent-character-avatar.center-mini {
-  width: 44px;
-  height: 44px;
-}
-.agent-stage-center-worker .center-mini .agent-character-glyph { font-size: 13px; }
-.agent-stage-center-worker .center-mini .agent-status-orb { width: 11px; height: 11px; right: 1px; bottom: 1px; }
-.agent-stage-center-worker-name {
-  font-size: 9px;
-  font-weight: 800;
-  color: var(--text);
-  max-width: 64px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@keyframes centerEnter {
-  from { opacity: 0; transform: translateY(8px) scale(0.9); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
 .timeline-item.clickable, .item.clickable, .result-file-chip.clickable {
   cursor: pointer;
 }
