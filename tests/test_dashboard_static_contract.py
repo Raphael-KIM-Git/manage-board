@@ -22,6 +22,15 @@ class DashboardStaticContractTests(unittest.TestCase):
         ]
         positions = [self.source.index(f'id="{section_id}"') for section_id in ids]
         self.assertEqual(positions, sorted(positions))
+        recent_audit_label = '<p class="section-kicker">Recent Audit</p>'
+        recent_audit_section = re.search(
+            r'<section\b[^>]*id="recentAudit"[^>]*>.*?</section>',
+            self.source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(recent_audit_section)
+        assert recent_audit_section is not None
+        self.assertIn(recent_audit_label, recent_audit_section.group(0))
 
     def test_dashboard_only_surface_has_required_hooks(self):
         for section_id in (
