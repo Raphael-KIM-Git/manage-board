@@ -158,15 +158,39 @@ class DashboardStaticContractTests(unittest.TestCase):
     def test_raw_gate_audit_has_required_fields_and_safe_semantics(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
         audit = js[js.index("function rawGateValue"):js.index("function renderTaskDetail")]
-        for field in ("source", "value", "scope", "reason", "time", "confidence"):
+        for field in ("source", "value", "scope", "reason", "time", "actor", "correlation", "version"):
             self.assertIn(f"['{field}'", audit)
         self.assertIn("원시 게이트 이력", audit)
-        self.assertIn("GATE1.5", audit)
-        self.assertIn("다음 단계 진행", audit)
+        self.assertNotIn("GATE1.5", audit)
+        self.assertIn("결정 없음", audit)
+        self.assertNotIn("normalized_decision", audit)
         self.assertNotIn("승인·진행", audit)
         self.assertNotIn("gate_id", audit)
         self.assertIn("근거 ${index + 1}", audit)
         self.assertIn("현재 원시 게이트 근거 없음", audit)
+        self.assertIn("audit.source_mechanism || audit.source", audit)
+
+    def test_raw_gate_and_authority_classifiers_do_not_infer_unsupported_evidence(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        gate = js[js.index("function rawGateLabel"):js.index("function rawGateDecisionLabel")]
+        authority = js[js.index("function authorityStatus"):js.index("function authorityPresentation")]
+        self.assertIn("원시 게이트 근거 ${index + 1}", gate)
+        self.assertNotIn("GATE1.5", gate)
+        self.assertNotIn("source_mechanism === 'hermes_gate'", gate)
+        self.assertIn("return 'history-unavailable';", authority)
+        self.assertNotIn("authority_summary", authority)
+        self.assertNotIn("if (!rows.length) return 'decision-none'", authority)
+
+    def test_authority_status_is_raw_only_and_audit_notice_is_present(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        detail = js[js.index("function renderTaskDetail(task)"):js.index("function openTaskDetail")]
+        self.assertIn("function authorityStatus(projection)", js)
+        for status in ("decision-none", "unknown", "history-unavailable"):
+            self.assertIn(status, js)
+        self.assertIn("audit-top-notice", detail)
+        self.assertIn("현재 raw 상태에서 복구할 수 있는 내용으로 제한", detail)
+        self.assertNotIn("effective_final_approved", js)
+        self.assertNotIn("현재 raw 근거로 검토 완료", js)
 
     def test_task_detail_keeps_file_viewer_and_escape_focus_return(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")

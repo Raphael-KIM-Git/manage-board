@@ -56,11 +56,23 @@ function dataQualityLabel(item) {
   return labels[item.kind] || item.kind || '확인 불가';
 }
 
+function authorityStatus(projection) {
+  const rows = Array.isArray(projection?.audit_rows) ? projection.audit_rows.filter((row) => row && typeof row === 'object') : [];
+  const explicit = rows.map((row) => row.status || row.state).find((value) => (
+    value === 'decision-none' || value === 'unknown' || value === 'history-unavailable'
+  ));
+  if (explicit === 'decision-none' || explicit === 'unknown' || explicit === 'history-unavailable') return explicit;
+  return 'history-unavailable';
+}
+
 function authorityPresentation(projection) {
-  const authority = projection?.authority_summary;
-  if (!authority) return { label: '현재 데이터에서 확인 불가', className: 'authority-unknown' };
-  if (authority.effective_final_approved === true) return { label: '현재 raw 근거로 검토 완료', className: 'authority-evidence' };
-  return { label: authority.label || '결정 없음', className: 'authority-unknown' };
+  const labels = {
+    'decision-none': '결정 없음',
+    unknown: '알 수 없음',
+    'history-unavailable': '이력 복구 불가',
+  };
+  const status = authorityStatus(projection);
+  return { status, label: labels[status] || labels.unknown, className: `authority-${status}` };
 }
 
 function pipelineShapePresentation(task) {
@@ -271,7 +283,7 @@ function fallbackProjection(task) {
     decision_queue_item: artifacts ? { kind: 'reviewable', question: '검토 가능한 파일이 있습니다', scope: 'unknown', primary_action: '산출물 검토' } : null,
     artifact_summary: { state: task.result_files?.length ? 'available' : 'none', items: task.result_files || [] },
     verification_summary: { state: task.verification_files?.length ? 'available_unstructured' : 'not_run', items: task.verification_files || [] },
-    authority_summary: { effective_final_approved: false, label: '현재 데이터에서 확인 불가' },
+    authority_summary: { status: 'history-unavailable' },
     data_quality: [{ kind: 'missing', field: 'dashboard_projection' }],
   };
 }
@@ -1219,13 +1231,12 @@ function rawGateValue(row) {
 }
 
 function rawGateLabel(row, index) {
-  if (row?.source_mechanism === 'hermes_gate' && row?.scope !== 'final-review') return 'GATE1.5';
-  return row?.source_mechanism || `근거 ${index + 1}`;
+  return `원시 게이트 근거 ${index + 1}`;
 }
 
 function rawGateDecisionLabel(row) {
-  if (row?.source_value === 'proceed') return '다음 단계 진행';
-  return row?.normalized_decision || '판단 없음';
+  if (row?.source_value === undefined || row?.source_value === null || row?.source_value === '') return '결정 없음';
+  return String(row.source_value);
 }
 
 function renderRawGateAudit(projection) {
@@ -1237,17 +1248,19 @@ function renderRawGateAudit(projection) {
     const item = el('article', 'raw-gate-audit-row');
     item.append(el('div', 'raw-gate-audit-heading', `${rawGateLabel(audit, index)} · ${rawGateDecisionLabel(audit)}`));
     const fields = [
-      ['source', audit.source_mechanism],
+      ['source', audit.source_mechanism || audit.source],
       ['value', rawGateValue(audit)],
       ['scope', audit.scope],
       ['reason', audit.reason],
       ['time', audit.time || audit.at || audit.timestamp],
-      ['confidence', audit.confidence],
+      ['actor', audit.actor],
+      ['correlation', audit.correlation || audit.correlation_id],
+      ['version', audit.version],
     ];
     fields.forEach(([label, value]) => {
       const field = el('div', 'raw-gate-audit-field');
       field.append(el('span', 'raw-gate-audit-key', label));
-      field.append(el('span', 'raw-gate-audit-value', detailValue(value, '확인 불가')));
+      field.append(el('span', 'raw-gate-audit-value', detailValue(value, '현재 raw에서 복구할 수 없음')));
       item.append(field);
     });
     rows.append(item);
@@ -1377,9 +1390,10 @@ function renderTaskDetail(task) {
 
   const authority = el('div', 'task-detail-copy');
   const authorityInfo = authorityPresentation(projection);
+  authority.append(el('p', 'audit-top-notice', '감사 패널은 현재 raw 상태에서 복구할 수 있는 내용으로 제한됩니다.'));
   authority.append(el('p', `task-detail-authority ${authorityInfo.className}`, `현재 권한 상태 · ${authorityInfo.label}`));
   const audit = projection.audit_rows || [];
-  authority.append(el('p', 'task-detail-meta', audit.length ? `현재 raw 감사 근거 ${audit.length}건` : '현재 raw 감사 근거 없음'));
+  authority.append(el('p', 'task-detail-meta', audit.length ? `현재 raw 감사 근거 ${audit.length}건` : '현재 raw 감사 이력 복구 불가'));
   authority.append(renderRawGateAudit(projection));
   body.append(detailSection('Authority / Audit', 'task-detail-authority-audit', authority));
 }
