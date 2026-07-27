@@ -67,6 +67,31 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn("조사→작성→검증→최종본", js)
         self.assertNotIn("full: '전체 공정'", js)
 
+    def test_active_work_card_is_outcome_first_and_detail_driven(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        card = js[js.index("function createTaskCard(task)"):js.index("function renderTasks(tasks)")]
+        order = [
+            "const outcome =",
+            "const progress =",
+            "const artifact =",
+            "const trust =",
+            "const authority = authorityPresentation",
+            "const actionRow = el('div', 'task-actions task-card-primary-action')",
+        ]
+        positions = [card.index(marker) for marker in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("extra.append(renderSeedWorkflow(task))", card)
+        self.assertIn("extra.append(liveWrap)", card)
+        self.assertNotIn("card.append(renderSeedWorkflow(task))", card)
+        self.assertNotIn("card.append(liveWrap)", card)
+        self.assertIn("extra.append(renderStageChips(task, compactHideGateDetails))", card)
+
+    def test_card_projection_helpers_fail_safe_without_projection(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("return task.dashboard_projection || fallbackProjection(task);", js)
+        self.assertIn("return '진행 단계 확인 불가';", js)
+        self.assertIn("return '아직 확인 가능한 산출물 없음';", js)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -398,30 +398,73 @@ function renderSeedWorkflow(task) {
   return wrap;
 }
 
+function taskProjection(task) {
+  return task.dashboard_projection || fallbackProjection(task);
+}
+
+function taskProgressSummary(task) {
+  const pipeline = task.pipeline;
+  if (pipeline?.current_stage) {
+    const completed = Number(pipeline.completed_stages || 0);
+    const total = Number(pipeline.stage_count || 0);
+    return total ? `${pipeline.current_stage} · ${completed}/${total} 단계 완료` : `현재 단계: ${pipeline.current_stage}`;
+  }
+  const stages = task.stages || [];
+  if (!stages.length) return '진행 단계 확인 불가';
+  const done = stages.filter((stage) => stage.status === 'completed' || stage.status === 'skipped').length;
+  const current = stages.find((stage) => ['in_progress', 'gate_hold', 'entry_hold'].includes(stage.status));
+  return current ? `${current.label || '현재 단계'} · ${done}/${stages.length} 단계 완료` : `${done}/${stages.length} 단계 완료`;
+}
+
+function taskArtifactSummary(task) {
+  const artifact = taskProjection(task).artifact_summary || {};
+  if (artifact.state === 'ambiguous') return '산출물 후보 여러 개 · 범위 확인 필요';
+  if (artifact.latest?.name) return `최근 산출물 · ${artifact.latest.name}`;
+  if (artifact.items?.length) return `산출물 ${artifact.items.length}개 확인 가능`;
+  return '아직 확인 가능한 산출물 없음';
+}
+
+function taskTrustSummary(task) {
+  const projection = taskProjection(task);
+  const quality = (projection.data_quality || []).slice(0, 2).map(dataQualityLabel);
+  const verification = projection.verification_summary;
+  if (quality.length) return quality.join(' · ');
+  if (verification?.state === 'not_run') return '검증 미실행';
+  if (verification?.state) return '검증 근거 있음';
+  return '추가 확인 필요';
+}
+
 function createTaskCard(task) {
   const card = el('article', `task-card ${taskTone(task.status)}`);
 
-  const head = el('div', 'task-head');
-  const titleWrap = el('div', '');
-  titleWrap.append(el('div', 'task-title', task.title));
-  titleWrap.append(el('div', 'task-submeta', `${humanStatus(task.status)} · ${task.updated_at || task.created_at}`));
-  head.append(titleWrap);
-  const pipeline = pipelineShapePresentation(task);
-  if (pipeline.label) head.append(el('span', `badge badge-pipe ${pipeline.className}`, pipeline.label));
-  const authority = authorityPresentation(task.dashboard_projection);
-  head.append(el('span', `data-authority ${authority.className}`, `◉ ${authority.label}`));
-  head.append(el('span', `badge ${badgeClass(task.status)}`, humanStatus(task.status)));
-  card.append(head);
-
   const isDone = ['completed', 'cancelled'].includes(task.status);
-  if (isDone) {
-    card.append(el('div', 'task-why task-why-compact', agentsUsedSummary(task)));
-  } else {
-    card.append(el('div', 'task-why', task.last_error ? `지금 확인 포인트: ${task.last_error}` : task.objective || '상세 목표 없음'));
-  }
-  const compactHideGateDetails = task.dashboard_projection?.compact_hide_gate_details ?? isDone;
-  card.append(renderStageChips(task, compactHideGateDetails));
-  card.append(renderSeedWorkflow(task));
+  const outcome = el('div', 'task-outcome');
+  outcome.append(el('div', 'task-title', task.title || task.task_id || '제목 없음'));
+  outcome.append(el('div', 'task-why', isDone ? agentsUsedSummary(task) : (task.objective || '상세 목표 없음')));
+  outcome.append(el('div', 'task-submeta', `${humanStatus(task.status)} · ${task.updated_at || task.created_at || '시간 미상'}`));
+  card.append(outcome);
+
+  const progress = el('div', 'task-card-fact task-progress');
+  progress.append(el('span', 'task-fact-label', '진행'));
+  progress.append(el('span', 'task-fact-value', taskProgressSummary(task)));
+  card.append(progress);
+  const pipeline = pipelineShapePresentation(task);
+  if (pipeline.label) card.append(el('div', 'task-pipeline-label', `파이프라인 · ${pipeline.label}`));
+  const artifact = el('div', 'task-card-fact task-artifact');
+  artifact.append(el('span', 'task-fact-label', '산출물'));
+  artifact.append(el('span', 'task-fact-value', taskArtifactSummary(task)));
+  card.append(artifact);
+  const trust = el('div', 'task-card-fact task-trust');
+  trust.append(el('span', 'task-fact-label', '신뢰'));
+  trust.append(el('span', 'task-fact-value', taskTrustSummary(task)));
+  card.append(trust);
+  const authority = authorityPresentation(taskProjection(task));
+  card.append(el('div', `data-authority ${authority.className}`, `권한 · ${authority.label}`));
+
+  const compactHideGateDetails = taskProjection(task).compact_hide_gate_details ?? isDone;
+  const extra = el('div', 'task-extra');
+  extra.append(renderStageChips(task, compactHideGateDetails));
+  extra.append(renderSeedWorkflow(task));
   if (task.pm_final_review && task.pm_final_review.verdict) {
     const fr = task.pm_final_review;
     const vlabel = { meets: '충족', partial: '대체로 충족', not_meets: '미충족' }[fr.verdict] || fr.verdict;
@@ -429,7 +472,7 @@ function createTaskCard(task) {
     frBox.append(el('span', 'final-review-badge', `PM 총평: ${vlabel}`));
     if (fr.comment) frBox.append(el('span', 'final-review-comment', fr.comment));
     if (fr.gaps) frBox.append(el('div', 'final-review-gaps', `보완: ${fr.gaps}`));
-    card.append(frBox);
+    extra.append(frBox);
     if (task.status === 'needs_pm_review' && fr.verdict === 'not_meets') {
       const frActions = el('div', 'stage-hold-actions');
       const acceptBtn = el('button', 'gate-btn gate-approve', '이대로 승인');
@@ -437,11 +480,10 @@ function createTaskCard(task) {
       const reworkBtn = el('button', 'gate-btn gate-revise', '재작업');
       reworkBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'rework', reworkBtn));
       frActions.append(acceptBtn, reworkBtn);
-      card.append(frActions);
+      extra.append(frActions);
     }
   }
 
-  const extra = el('div', 'task-extra');
   const workers = el('div', 'task-worker-list');
   (task.assigned_workers || []).forEach((worker) => workers.append(el('div', 'chip', worker)));
   if (!(task.assigned_workers || []).length) workers.append(el('div', 'chip', '할당 에이전트 미정'));
@@ -470,10 +512,6 @@ function createTaskCard(task) {
   const workerResults = renderWorkerResults(task);
   if (workerResults) extra.append(workerResults);
 
-  const expanded = expandedTasks.has(task.task_id);
-  extra.classList.toggle('is-collapsed', !expanded);
-  card.append(extra);
-
   if (!isDone) {
     const liveWrap = el('div', 'live-note-row');
     const pendingNotes = (task.pm_live_notes || []).filter((n) => !n.consumed);
@@ -497,10 +535,15 @@ function createTaskCard(task) {
     });
     inputRow.append(noteInput, sendBtn);
     liveWrap.append(inputRow);
-    card.append(liveWrap);
+    extra.append(liveWrap);
   }
 
-  const actionRow = el('div', 'task-actions');
+  const expanded = expandedTasks.has(task.task_id);
+  extra.dataset.compactHideGateDetails = compactHideGateDetails ? 'true' : 'false';
+  extra.classList.toggle('is-collapsed', !expanded);
+  card.append(extra);
+
+  const actionRow = el('div', 'task-actions task-card-primary-action');
   const toggleBtn = el('button', 'mini-btn subtle-btn', expanded ? '간단히 보기' : '상세 보기');
   toggleBtn.type = 'button';
   toggleBtn.addEventListener('click', () => {
@@ -513,7 +556,10 @@ function createTaskCard(task) {
   const btn = el('button', 'mini-btn', '다시 전송');
   btn.disabled = ['completed', 'cancelled'].includes(task.status);
   btn.addEventListener('click', () => dispatchTask(task.task_id, btn));
-  actionRow.append(toggleBtn, btn);
+  actionRow.append(toggleBtn);
+  const detailActions = el('div', 'task-actions task-detail-actions');
+  detailActions.append(btn);
+  extra.append(detailActions);
   card.append(actionRow);
 
   return card;

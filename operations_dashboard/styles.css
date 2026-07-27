@@ -193,6 +193,13 @@ h1 {
 .task-card.status-waiting { background: linear-gradient(180deg, #fbf8ff, #f3eefc); }
 .task-card.status-completed { background: linear-gradient(180deg, #fffefc, #f5fbf7); }
 .task-card.status-cancelled { background: linear-gradient(180deg, #fbfaf8, #f4efe8); }
+.task-outcome { display: grid; gap: 5px; }
+.task-card-fact { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; align-items: baseline; padding-top: 8px; border-top: 1px solid rgba(229,217,200,0.72); }
+.task-fact-label { color: var(--muted); font-size: 10px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
+.task-fact-value, .task-pipeline-label { min-width: 0; color: #51463b; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.task-pipeline-label { color: var(--muted); font-size: 11px; }
+.task-card-primary-action { justify-content: flex-end; }
+.task-detail-actions { justify-content: flex-end; padding-top: 8px; border-top: 1px solid rgba(229,217,200,0.72); }
 .task-head {
   display: flex;
   justify-content: space-between;
