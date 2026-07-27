@@ -156,15 +156,7 @@ function renderStageChips(task, compact = false) {
       if (g.reason) gwrap.append(el('span', 'stage-gate-reason', g.reason));
       copy.append(gwrap);
     }
-    if (!compact && status === 'gate_hold') {
-      const holdRow = el('div', 'stage-hold-actions');
-      const approveBtn = el('button', 'gate-btn gate-approve', '승인·진행');
-      approveBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'approve', approveBtn));
-      const reviseBtn = el('button', 'gate-btn gate-revise', '재작업');
-      reviseBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'revise', reviseBtn));
-      holdRow.append(approveBtn, reviseBtn);
-      copy.append(holdRow);
-    }
+
     if (!compact && stage.entry_gate && stage.entry_gate.decision) {
       const eg = stage.entry_gate;
       const cls = eg.decision === 'skip_research' ? 'revise' : eg.decision === 'hold' ? 'hold' : eg.decision === 'pending' ? 'pending' : 'proceed';
@@ -174,15 +166,7 @@ function renderStageChips(task, compact = false) {
       if (eg.reason) ewrap.append(el('span', 'stage-gate-reason', eg.reason));
       copy.append(ewrap);
     }
-    if (!compact && status === 'entry_hold') {
-      const eHold = el('div', 'stage-hold-actions');
-      const goBtn = el('button', 'gate-btn gate-approve', '진행');
-      goBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'approve', goBtn));
-      const skipBtn = el('button', 'gate-btn gate-revise', 'research 생략');
-      skipBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'skip', skipBtn));
-      eHold.append(goBtn, skipBtn);
-      copy.append(eHold);
-    }
+
     node.append(copy);
     root.append(node);
   });
@@ -487,15 +471,7 @@ function createTaskCard(task) {
     if (fr.comment) frBox.append(el('span', 'final-review-comment', fr.comment));
     if (fr.gaps) frBox.append(el('div', 'final-review-gaps', `보완: ${fr.gaps}`));
     extra.append(frBox);
-    if (task.status === 'needs_pm_review' && fr.verdict === 'not_meets') {
-      const frActions = el('div', 'stage-hold-actions');
-      const acceptBtn = el('button', 'gate-btn gate-approve', '최종 검토 override 요청');
-      acceptBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'accept', acceptBtn));
-      const reworkBtn = el('button', 'gate-btn gate-revise', '재작업 override 요청');
-      reworkBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'rework', reworkBtn));
-      frActions.append(acceptBtn, reworkBtn);
-      extra.append(frActions);
-    }
+
   }
 
   const workers = el('div', 'task-worker-list');
@@ -526,31 +502,6 @@ function createTaskCard(task) {
   const workerResults = renderWorkerResults(task);
   if (workerResults) extra.append(workerResults);
 
-  if (!isDone) {
-    const liveWrap = el('div', 'live-note-row');
-    const pendingNotes = (task.pm_live_notes || []).filter((n) => !n.consumed);
-    if (pendingNotes.length) {
-      const pendingRow = el('div', 'live-note-pending');
-      pendingNotes.slice(-3).forEach((n) => pendingRow.append(el('div', 'chip live-note-chip', `지시 대기: ${n.note}`)));
-      liveWrap.append(pendingRow);
-    }
-    const inputRow = el('div', 'live-note-input-row');
-    const noteInput = document.createElement('input');
-    noteInput.type = 'text';
-    noteInput.className = 'live-note-input';
-    noteInput.placeholder = 'PM 지시 추가 — 다음 심사·단계부터 반영 (보류 중이면 재심사)';
-    noteInput.value = liveNoteDrafts[task.task_id] || '';
-    noteInput.addEventListener('input', () => { liveNoteDrafts[task.task_id] = noteInput.value; });
-    const sendBtn = el('button', 'mini-btn', '지시 전달');
-    sendBtn.type = 'button';
-    sendBtn.addEventListener('click', () => submitLiveNote(task.task_id, noteInput, sendBtn));
-    noteInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); submitLiveNote(task.task_id, noteInput, sendBtn); }
-    });
-    inputRow.append(noteInput, sendBtn);
-    liveWrap.append(inputRow);
-    extra.append(liveWrap);
-  }
 
   const expanded = expandedTasks.has(task.task_id);
   extra.dataset.compactHideGateDetails = compactHideGateDetails ? 'true' : 'false';
@@ -1220,6 +1171,8 @@ function renderTaskStageTimeline(task) {
     (stage.agents || []).forEach((agent) => agents.append(el('span', 'chip', agent)));
     if (!(stage.agents || []).length) agents.append(el('span', 'stage-timeline-summary-empty', '에이전트 정보 없음'));
     row.append(agents);
+    const controls = renderScopedGateControls(task, stage);
+    if (controls) row.append(controls);
     root.append(row);
   });
   if (!stages.length) root.append(el('p', 'empty', '진행 단계 확인 불가'));
@@ -1228,6 +1181,57 @@ function renderTaskStageTimeline(task) {
 
 function rawGateValue(row) {
   return detailValue(row?.source_value, '값 확인 불가');
+}
+
+function renderScopedGateControls(task, stage) {
+  if (!task || !stage) return null;
+  const actions = el('div', 'stage-hold-actions task-detail-gate-actions');
+  if (stage.status === 'entry_hold') {
+    const goBtn = el('button', 'gate-btn gate-approve', '진행');
+    goBtn.type = 'button';
+    goBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'approve', goBtn));
+    const skipBtn = el('button', 'gate-btn gate-revise', 'research 생략');
+    skipBtn.type = 'button';
+    skipBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'skip', skipBtn));
+    actions.append(goBtn, skipBtn);
+  } else if (stage.status === 'gate_hold') {
+    const approveBtn = el('button', 'gate-btn gate-approve', '승인·진행');
+    approveBtn.type = 'button';
+    approveBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'approve', approveBtn));
+    const reviseBtn = el('button', 'gate-btn gate-revise', '재작업');
+    reviseBtn.type = 'button';
+    reviseBtn.addEventListener('click', () => gateOverride(task.task_id, stage.id, 'revise', reviseBtn));
+    actions.append(approveBtn, reviseBtn);
+  }
+  return actions.childNodes.length ? actions : null;
+}
+
+function renderTaskLiveNoteContext(task) {
+  const section = el('section', 'task-detail-live-context');
+  section.append(el('h3', 'task-detail-section-title', 'Live note context'));
+  section.append(el('p', 'task-detail-meta', '비결정 맥락 · 다음 심사·단계부터 반영됩니다.'));
+  const pendingNotes = (task.pm_live_notes || []).filter((n) => !n.consumed);
+  if (pendingNotes.length) {
+    const pending = el('div', 'live-note-pending');
+    pendingNotes.slice(-3).forEach((n) => pending.append(el('p', 'live-note-context-item', `지시 대기: ${detailValue(n.note, '내용 확인 불가')}`)));
+    section.append(pending);
+  }
+  const inputRow = el('div', 'live-note-input-row');
+  const noteInput = document.createElement('input');
+  noteInput.type = 'text';
+  noteInput.className = 'live-note-input';
+  noteInput.placeholder = 'PM 지시 추가 — 다음 심사·단계부터 반영 (보류 중이면 재심사)';
+  noteInput.value = liveNoteDrafts[task.task_id] || '';
+  noteInput.addEventListener('input', () => { liveNoteDrafts[task.task_id] = noteInput.value; });
+  const sendBtn = el('button', 'mini-btn', '지시 전달');
+  sendBtn.type = 'button';
+  sendBtn.addEventListener('click', () => submitLiveNote(task.task_id, noteInput, sendBtn));
+  noteInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitLiveNote(task.task_id, noteInput, sendBtn); }
+  });
+  inputRow.append(noteInput, sendBtn);
+  section.append(inputRow);
+  return section;
 }
 
 function rawGateLabel(row, index) {
@@ -1384,6 +1388,7 @@ function renderTaskDetail(task) {
   const stage = el('div', 'task-detail-stage');
   stage.append(renderTaskStageTimeline(task));
   body.append(detailSection('Stage timeline', 'task-detail-stage-section', stage));
+  if (!['completed', 'cancelled'].includes(task.status)) body.append(renderTaskLiveNoteContext(task));
 
   // Evidence-first sections: 'Artifacts' -> 'Verification'.
   body.append(renderArtifactReviewPanel(task, projection));
