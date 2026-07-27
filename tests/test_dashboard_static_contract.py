@@ -117,6 +117,40 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn('<details id="secondaryAgentContext"', self.source)
         self.assertNotIn('<details id="secondaryAgentContext" open', self.source)
 
+    def test_task_detail_dialog_is_semantic_and_accessible(self):
+        self.assertIn('id="taskDetailModal"', self.source)
+        self.assertIn('role="dialog"', self.source)
+        self.assertIn('aria-labelledby="taskDetailTitle"', self.source)
+        self.assertIn('aria-describedby="taskDetailStatus"', self.source)
+        self.assertIn('id="closeTaskDetailBtn"', self.source)
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        for hook in ("openTaskDetail", "closeTaskDetail", "taskDetailReturnFocus", "data-close-task-detail"):
+            self.assertIn(hook, self.source + js)
+
+    def test_all_task_entry_paths_use_same_detail_opening(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        card = js[js.index("function createTaskCard(task)"):js.index("function renderTasks(tasks)")]
+        queue = js[js.index("function createDecisionQueueItem"):js.index("function renderMissionControl")]
+        artifacts = js[js.index("function renderReviewableArtifacts"):js.index("function renderTaskSummary")]
+        self.assertIn("openTaskDetail(task, taskDetailBtn)", card)
+        self.assertIn("openTaskDetail(task, action)", queue)
+        self.assertIn("openTaskDetail(task, row)", artifacts)
+
+    def test_task_detail_sections_are_ordered_and_read_only(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        renderer = js[js.index("function renderTaskDetail(task)"):js.index("function openTaskDetail")]
+        markers = ["'Outcome'", "'Stage timeline'", "'Artifacts'", "'Verification'", "'Authority / Audit'"]
+        self.assertEqual([renderer.index(marker) for marker in markers], sorted(renderer.index(marker) for marker in markers))
+        self.assertIn("taskProjection(task)", renderer)
+        self.assertIn("선택된 업무 정보를 확인할 수 없습니다.", renderer)
+
+    def test_task_detail_keeps_file_viewer_and_escape_focus_return(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function openDetail(dir, name)", js)
+        self.assertIn("closeTaskDetail();", js[js.index("function setupModal"):js.index("function setupConversationMirror")])
+        closer = js[js.index("function closeTaskDetail"):js.index("// 진행 상황")]
+        self.assertIn("taskDetailReturnFocus.focus()", closer)
+
 
 if __name__ == "__main__":
     unittest.main()
