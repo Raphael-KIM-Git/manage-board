@@ -389,7 +389,7 @@ h1 {
 
 .flow-grid {
   display: grid;
-  grid-template-columns: 1.35fr .85fr;
+  grid-template-columns: 1fr;
   gap: 16px;
 }
 .timeline-panel,
@@ -399,6 +399,26 @@ h1 {
 .side-stack {
   display: grid;
   gap: 16px;
+}
+.secondary-context {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 252, 247, 0.72);
+  box-shadow: var(--shadow-md);
+}
+.secondary-context summary {
+  cursor: pointer;
+  padding: 16px 20px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+.secondary-context-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 16px 16px;
 }
 .timeline {
   display: grid;
@@ -418,8 +438,7 @@ h1 {
   background: var(--accent);
   box-shadow: 0 0 0 6px rgba(79,121,216,0.08);
 }
-.kind-review .timeline-mark { background: var(--violet); box-shadow: 0 0 0 6px rgba(125,102,186,0.08); }
-.kind-digest .timeline-mark { background: var(--warm); box-shadow: 0 0 0 6px rgba(216,140,107,0.08); }
+.kind-current-evidence .timeline-mark { background: var(--violet); box-shadow: 0 0 0 6px rgba(125,102,186,0.08); }
 .timeline-meta {
   font-size: 12px;
   color: var(--muted);
@@ -747,7 +766,8 @@ textarea { resize: vertical; min-height: 110px; }
     align-items: flex-start;
   }
   .two-col,
-  .artifact-ref {
+  .artifact-ref,
+  .secondary-context-grid {
     grid-template-columns: 1fr;
   }
   .stage-track {

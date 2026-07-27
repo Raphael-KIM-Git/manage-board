@@ -345,9 +345,10 @@ function renderReviewableArtifacts(tasks) {
   if (!items.length) { root.append(el('div', 'empty', '현재 검토 가능한 산출물이 없습니다.')); return; }
   items.slice(0, 12).forEach(({ task, file, kind }) => {
     const row = el('div', 'item artifact-reference');
-    row.append(el('div', 'item-title', `${kind} · ${file.name || '이름 없음'}`));
-    row.append(el('div', 'item-meta', task.title || task.task_id));
-    if (file.modified_at) row.append(el('div', 'item-preview', file.modified_at));
+    const name = typeof file === 'string' ? file : file?.name;
+    row.append(el('div', 'item-title', `${kind} · ${name || '이름 없음'}`));
+    row.append(el('div', 'item-meta', task.title || task.task_id || '업무 정보 없음'));
+    row.append(el('div', 'item-preview', '현재 응답에서 확인된 읽기 전용 근거'));
     root.append(row);
   });
 }
@@ -600,35 +601,43 @@ function parseTime(value) {
   return Number.isNaN(t) ? 0 : t;
 }
 
-function mergeFlow(results, verifications, digests) {
-  const merged = [];
-  results.forEach((item) => merged.push({ ...item, kind: 'result', kindLabel: '결과 도착' }));
-  verifications.forEach((item) => merged.push({ ...item, kind: 'review', kindLabel: '검토 메모' }));
-  digests.forEach((item) => merged.push({ ...item, kind: 'digest', kindLabel: '운영 기록' }));
-  return merged.sort((a, b) => parseTime(b.modified_at) - parseTime(a.modified_at));
+function auditSourceLabel(source) {
+  return {
+    hermes_gate: '게이트 근거',
+    entry_gate: '진입 근거',
+    pm_final_review: '최종 검토 근거',
+    final_review_override: '검토 재확인 근거',
+    pm_live_notes: '비결정 맥락',
+  }[source] || '현재 raw 근거';
 }
 
-function renderRecentFlow(results, verifications, digests) {
+function renderRecentFlow(tasks) {
   const root = document.getElementById('recentFlow');
   root.innerHTML = '';
-  const merged = mergeFlow(results, verifications, digests).slice(0, 10);
+  const merged = [];
+  (tasks || []).forEach((task) => {
+    const projection = taskProjection(task);
+    (projection.audit_rows || []).forEach((audit, index) => {
+      if (!audit || typeof audit !== 'object') return;
+      merged.push({ task, audit, index });
+    });
+  });
   if (!merged.length) {
     root.append(el('div', 'empty', '최근 흐름이 아직 없습니다.'));
     return;
   }
 
-  merged.forEach((item) => {
-    const row = el('article', `timeline-item kind-${item.kind}`);
+  merged.slice(-12).reverse().forEach(({ task, audit }) => {
+    const source = auditSourceLabel(audit.source_mechanism);
+    const row = el('article', 'timeline-item kind-current-evidence');
     row.append(el('div', 'timeline-mark'));
 
     const body = el('div', 'timeline-body');
-    body.append(el('div', 'timeline-meta', `${item.kindLabel} · ${item.modified_at}`));
-    body.append(el('div', 'timeline-title', item.name));
-    body.append(el('div', 'timeline-preview', shortPreview(item.preview)));
+    body.append(el('div', 'timeline-meta', `${source} · ${audit.scope || '범위 확인 불가'}`));
+    body.append(el('div', 'timeline-title', task.title || task.task_id || '제목 없음'));
+    const value = audit.source_value ?? audit.reason ?? '값 확인 불가';
+    body.append(el('div', 'timeline-preview', String(value)));
     row.append(body);
-    row.classList.add('clickable');
-    row.title = '클릭하면 새 창에서 자세히 봅니다';
-    row.addEventListener('click', () => openDetail(detailDirForKind(item.kind), item.name));
     root.append(row);
   });
 }
@@ -952,7 +961,7 @@ async function loadDashboard() {
   renderDecisionQueue(tasks || []);
   renderReviewableArtifacts(tasks || []);
   renderTasks(tasks || []);
-  renderRecentFlow(results || [], verifications || [], digests || []);
+  renderRecentFlow(tasks || []);
   renderSimpleList('resultsList', results || []);
   renderSimpleList('digestsList', digests || []);
   renderArtifactReferences();
