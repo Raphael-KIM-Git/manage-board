@@ -175,6 +175,23 @@ class DashboardStaticContractTests(unittest.TestCase):
         closer = js[js.index("function closeTaskDetail"):js.index("// 진행 상황")]
         self.assertIn("taskDetailReturnFocus.focus()", closer)
 
+    def test_artifact_review_panel_is_evidence_first_and_fail_safe(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        panel = js[js.index("function renderArtifactReviewPanel"):js.index("function renderTaskDetail")]
+        for marker in ("Artifacts", "Verification", "Target scope", "artifactBindingPresentation", "최종본 연결 확인 불가"):
+            self.assertIn(marker, panel)
+        self.assertLess(panel.index("artifact-review-binding"), panel.index("artifact-review-actions"))
+        self.assertIn("검증 근거를 사용할 수 없습니다", panel)
+
+    def test_final_review_uses_exact_honest_override_ctas_and_contract(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("fetch('/api/final-review'", js)
+        self.assertIn("JSON.stringify({ task_id: taskId, action })", js)
+        self.assertEqual(js.count("최종 검토 override 요청"), 2)
+        self.assertEqual(js.count("재작업 override 요청"), 2)
+        self.assertIn("await loadDashboard();", js[js.index("async function finalReviewOverride"):js.index("async function gateOverride")])
+        self.assertNotIn("이대로 승인", js)
+
 
 if __name__ == "__main__":
     unittest.main()
