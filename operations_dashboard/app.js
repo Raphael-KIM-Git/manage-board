@@ -477,9 +477,9 @@ function createTaskCard(task) {
     extra.append(frBox);
     if (task.status === 'needs_pm_review' && fr.verdict === 'not_meets') {
       const frActions = el('div', 'stage-hold-actions');
-      const acceptBtn = el('button', 'gate-btn gate-approve', '이대로 승인');
+      const acceptBtn = el('button', 'gate-btn gate-approve', '최종 검토 override 요청');
       acceptBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'accept', acceptBtn));
-      const reworkBtn = el('button', 'gate-btn gate-revise', '재작업');
+      const reworkBtn = el('button', 'gate-btn gate-revise', '재작업 override 요청');
       reworkBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'rework', reworkBtn));
       frActions.append(acceptBtn, reworkBtn);
       extra.append(frActions);
@@ -1257,6 +1257,103 @@ function renderRawGateAudit(projection) {
   return disclosure;
 }
 
+function artifactBindingPresentation(task, projection) {
+  const review = task?.pm_final_review;
+  const artifact = projection?.artifact_summary || {};
+  const latest = artifact.latest || {};
+  const binding = review && (review.artifact_id || review.result_artifact_id || review.artifact_version || review.result_version);
+  const matches = Boolean(binding && artifact.state === 'available' && (
+    (review.artifact_id && review.artifact_id === (latest.name || latest.id))
+    || (review.result_artifact_id && review.result_artifact_id === (latest.name || latest.id))
+    || (review.artifact_version && review.artifact_version === latest.version)
+    || (review.result_version && review.result_version === latest.version)
+  ));
+  return {
+    available: matches,
+    label: matches ? '최종 검토 대상 연결 확인됨' : '최종본 연결 확인 불가',
+    warning: matches ? '' : '최종 산출물 또는 버전에 연결된 최종 검토 근거가 없어 override 요청을 안전하게 확인할 수 없습니다.',
+  };
+}
+
+function renderArtifactReviewPanel(task, projection) {
+  const panel = el('section', 'artifact-review-panel');
+  panel.append(el('h3', 'task-detail-section-title', 'Artifact Review'));
+  const artifact = projection?.artifact_summary || {};
+  const latest = artifact.latest || {};
+  const artifacts = el('div', 'artifact-review-block');
+  artifacts.append(el('h4', 'artifact-review-label', 'Artifacts'));
+  const artifactItems = artifact.items || [];
+  if (!artifactItems.length) artifacts.append(el('p', 'empty', '현재 확인 가능한 산출물이 없습니다.'));
+  artifactItems.forEach((file) => {
+    const name = typeof file === 'string' ? file : file?.name;
+    if (!name) return;
+    const button = el('button', 'item artifact-reference clickable', `결과 · ${name}`);
+    button.type = 'button';
+    button.addEventListener('click', () => openDetail('results', name));
+    artifacts.append(button);
+  });
+  if (latest.name || latest.id || latest.version || latest.size !== undefined) {
+    const metadata = el('div', 'artifact-review-metadata');
+    [['name', latest.name], ['id', latest.id], ['version', latest.version], ['size', latest.size]].forEach(([label, value]) => {
+      if (value === undefined || value === null || value === '') return;
+      metadata.append(el('span', 'artifact-review-meta-item', `${label}: ${value}`));
+    });
+    artifacts.append(metadata);
+  }
+  panel.append(artifacts);
+
+  const acceptance = el('div', 'artifact-review-block');
+  acceptance.append(el('h4', 'artifact-review-label', 'Acceptance criteria'));
+  const acceptanceCriteria = task?.acceptance_criteria;
+  if (Array.isArray(acceptanceCriteria) && acceptanceCriteria.length) {
+    acceptanceCriteria.forEach((criterion) => acceptance.append(el('p', 'task-detail-lead', detailValue(criterion, '확인 불가'))));
+  } else if (typeof acceptanceCriteria === 'string' && acceptanceCriteria.trim()) {
+    acceptance.append(el('p', 'task-detail-lead', acceptanceCriteria));
+  } else {
+    acceptance.append(el('p', 'artifact-review-warning-detail', 'AC를 사용할 수 없습니다.'));
+  }
+  panel.append(acceptance);
+
+  const verification = el('div', 'artifact-review-block');
+  verification.append(el('h4', 'artifact-review-label', 'Verification'));
+  const verificationSummary = projection?.verification_summary || {};
+  verification.append(el('p', 'task-detail-lead', verificationSummary.state === 'not_run' ? '검증 근거를 사용할 수 없습니다 — 검증 미실행' : detailValue(verificationSummary.state, '검증 상태 확인 불가')));
+  (verificationSummary.items || []).forEach((file) => {
+    const name = typeof file === 'string' ? file : file?.name;
+    if (!name) return;
+    const button = el('button', 'mini-btn subtle-btn', `검증 파일 · ${name}`);
+    button.type = 'button';
+    button.addEventListener('click', () => openDetail('verifications', name));
+    verification.append(button);
+  });
+  panel.append(verification);
+
+  const scope = projection?.decision_queue_item?.scope;
+  const scopeBlock = el('div', 'artifact-review-block');
+  scopeBlock.append(el('h4', 'artifact-review-label', 'Target scope'));
+  scopeBlock.append(el('p', 'task-detail-lead', detailValue(scope, '대상 범위 확인 불가')));
+  panel.append(scopeBlock);
+
+  const binding = artifactBindingPresentation(task, projection);
+  const unavailableLabel = '최종본 연결 확인 불가';
+  const bindingBlock = el('div', `artifact-review-binding ${binding.available ? 'is-available' : 'is-unavailable'}`);
+  bindingBlock.append(el('p', 'artifact-review-warning', binding.available ? binding.label : `주의: ${unavailableLabel}`));
+  if (binding.warning) bindingBlock.append(el('p', 'artifact-review-warning-detail', binding.warning));
+  panel.append(bindingBlock);
+
+  const review = task?.pm_final_review || {};
+  if (task.status === 'needs_pm_review' && review.verdict === 'not_meets') {
+    const actions = el('div', 'artifact-review-actions');
+    const acceptBtn = el('button', 'gate-btn gate-approve', '최종 검토 override 요청');
+    acceptBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'accept', acceptBtn));
+    const reworkBtn = el('button', 'gate-btn gate-revise', '재작업 override 요청');
+    reworkBtn.addEventListener('click', () => finalReviewOverride(task.task_id, 'rework', reworkBtn));
+    actions.append(acceptBtn, reworkBtn);
+    panel.append(actions);
+  }
+  return panel;
+}
+
 function renderTaskDetail(task) {
   const body = document.getElementById('taskDetailBody');
   if (!body) return;
@@ -1275,31 +1372,8 @@ function renderTaskDetail(task) {
   stage.append(renderTaskStageTimeline(task));
   body.append(detailSection('Stage timeline', 'task-detail-stage-section', stage));
 
-  const artifacts = el('div', 'task-detail-list');
-  const artifactItems = projection.artifact_summary?.items || [];
-  if (!artifactItems.length) artifacts.append(el('p', 'empty', '현재 확인 가능한 산출물이 없습니다.'));
-  artifactItems.forEach((file) => {
-    const name = typeof file === 'string' ? file : file?.name;
-    if (!name) return;
-    const button = el('button', 'item artifact-reference clickable', `결과 · ${name}`);
-    button.type = 'button';
-    button.addEventListener('click', () => openDetail('results', name));
-    artifacts.append(button);
-  });
-  body.append(detailSection('Artifacts', 'task-detail-artifacts', artifacts));
-
-  const verification = el('div', 'task-detail-copy');
-  const verificationSummary = projection.verification_summary || {};
-  verification.append(el('p', 'task-detail-lead', verificationSummary.state === 'not_run' ? '검증 미실행' : detailValue(verificationSummary.state, '검증 상태 확인 불가')));
-  (verificationSummary.items || []).forEach((file) => {
-    const name = typeof file === 'string' ? file : file?.name;
-    if (!name) return;
-    const button = el('button', 'mini-btn subtle-btn', `검증 파일 · ${name}`);
-    button.type = 'button';
-    button.addEventListener('click', () => openDetail('verifications', name));
-    verification.append(button);
-  });
-  body.append(detailSection('Verification', 'task-detail-verification', verification));
+  // Evidence-first sections: 'Artifacts' -> 'Verification'.
+  body.append(renderArtifactReviewPanel(task, projection));
 
   const authority = el('div', 'task-detail-copy');
   const authorityInfo = authorityPresentation(projection);
