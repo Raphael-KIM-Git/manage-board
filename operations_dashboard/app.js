@@ -1197,6 +1197,66 @@ function detailSection(title, className, content) {
   return section;
 }
 
+function renderTaskStageTimeline(task) {
+  const root = el('div', 'stage-timeline-summary');
+  const stages = task?.stages || [];
+  stages.forEach((stage) => {
+    const row = el('div', 'stage-timeline-summary-row');
+    row.append(el('span', 'stage-timeline-summary-stage', detailValue(stage.label || stage.id, '단계 확인 불가')));
+    row.append(el('span', 'stage-timeline-summary-status', humanStatus(stage.status || 'unknown')));
+    const agents = el('span', 'stage-timeline-summary-agents');
+    (stage.agents || []).forEach((agent) => agents.append(el('span', 'chip', agent)));
+    if (!(stage.agents || []).length) agents.append(el('span', 'stage-timeline-summary-empty', '에이전트 정보 없음'));
+    row.append(agents);
+    root.append(row);
+  });
+  if (!stages.length) root.append(el('p', 'empty', '진행 단계 확인 불가'));
+  return root;
+}
+
+function rawGateValue(row) {
+  return detailValue(row?.source_value, '값 확인 불가');
+}
+
+function rawGateLabel(row, index) {
+  if (row?.source_mechanism === 'hermes_gate' && row?.scope !== 'final-review') return 'GATE1.5';
+  return row?.source_mechanism || `근거 ${index + 1}`;
+}
+
+function rawGateDecisionLabel(row) {
+  if (row?.source_value === 'proceed') return '다음 단계 진행';
+  return row?.normalized_decision || '판단 없음';
+}
+
+function renderRawGateAudit(projection) {
+  const disclosure = el('details', 'raw-gate-disclosure');
+  disclosure.append(el('summary', '', '원시 게이트 이력'));
+  const rows = el('div', 'raw-gate-audit-list');
+  (projection?.audit_rows || []).forEach((audit, index) => {
+    if (!audit || typeof audit !== 'object') return;
+    const item = el('article', 'raw-gate-audit-row');
+    item.append(el('div', 'raw-gate-audit-heading', `${rawGateLabel(audit, index)} · ${rawGateDecisionLabel(audit)}`));
+    const fields = [
+      ['source', audit.source_mechanism],
+      ['value', rawGateValue(audit)],
+      ['scope', audit.scope],
+      ['reason', audit.reason],
+      ['time', audit.time || audit.at || audit.timestamp],
+      ['confidence', audit.confidence],
+    ];
+    fields.forEach(([label, value]) => {
+      const field = el('div', 'raw-gate-audit-field');
+      field.append(el('span', 'raw-gate-audit-key', label));
+      field.append(el('span', 'raw-gate-audit-value', detailValue(value, '확인 불가')));
+      item.append(field);
+    });
+    rows.append(item);
+  });
+  if (!rows.childNodes.length) rows.append(el('p', 'empty', '현재 원시 게이트 근거 없음'));
+  disclosure.append(rows);
+  return disclosure;
+}
+
 function renderTaskDetail(task) {
   const body = document.getElementById('taskDetailBody');
   if (!body) return;
@@ -1212,7 +1272,7 @@ function renderTaskDetail(task) {
   body.append(detailSection('Outcome', 'task-detail-outcome', outcome));
 
   const stage = el('div', 'task-detail-stage');
-  stage.append(renderStageChips(task, true));
+  stage.append(renderTaskStageTimeline(task));
   body.append(detailSection('Stage timeline', 'task-detail-stage-section', stage));
 
   const artifacts = el('div', 'task-detail-list');
@@ -1246,6 +1306,7 @@ function renderTaskDetail(task) {
   authority.append(el('p', `task-detail-authority ${authorityInfo.className}`, `현재 권한 상태 · ${authorityInfo.label}`));
   const audit = projection.audit_rows || [];
   authority.append(el('p', 'task-detail-meta', audit.length ? `현재 raw 감사 근거 ${audit.length}건` : '현재 raw 감사 근거 없음'));
+  authority.append(renderRawGateAudit(projection));
   body.append(detailSection('Authority / Audit', 'task-detail-authority-audit', authority));
 }
 

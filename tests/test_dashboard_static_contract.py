@@ -144,6 +144,30 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn("taskProjection(task)", renderer)
         self.assertIn("선택된 업무 정보를 확인할 수 없습니다.", renderer)
 
+    def test_stage_detail_separates_summary_timeline_from_raw_gate_disclosure(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        renderer = js[js.index("function renderTaskDetail(task)"):js.index("function openTaskDetail")]
+        self.assertIn("renderTaskStageTimeline(task)", renderer)
+        self.assertIn("renderRawGateAudit(projection)", renderer)
+        timeline = js[js.index("function renderTaskStageTimeline"):js.index("function rawGateValue")]
+        self.assertIn("stage.status", timeline)
+        self.assertIn("stage.agents", timeline)
+        self.assertNotIn("gateOverride", timeline)
+        self.assertNotIn("승인", timeline)
+
+    def test_raw_gate_audit_has_required_fields_and_safe_semantics(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        audit = js[js.index("function rawGateValue"):js.index("function renderTaskDetail")]
+        for field in ("source", "value", "scope", "reason", "time", "confidence"):
+            self.assertIn(f"['{field}'", audit)
+        self.assertIn("원시 게이트 이력", audit)
+        self.assertIn("GATE1.5", audit)
+        self.assertIn("다음 단계 진행", audit)
+        self.assertNotIn("승인·진행", audit)
+        self.assertNotIn("gate_id", audit)
+        self.assertIn("근거 ${index + 1}", audit)
+        self.assertIn("현재 원시 게이트 근거 없음", audit)
+
     def test_task_detail_keeps_file_viewer_and_escape_focus_return(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
         self.assertIn("function openDetail(dir, name)", js)
