@@ -92,6 +92,31 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn("return '진행 단계 확인 불가';", js)
         self.assertIn("return '아직 확인 가능한 산출물 없음';", js)
 
+    def test_reviewable_artifacts_are_projection_tiles_without_mtime_or_version_copy(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        renderer = js[js.index("function renderReviewableArtifacts(tasks)"):js.index("function renderTaskSummary(tasks)")]
+        self.assertIn("artifact_summary?.items", renderer)
+        self.assertIn("verification_summary?.items", renderer)
+        self.assertIn("읽기 전용 근거", renderer)
+        self.assertNotIn("modified_at", renderer)
+        self.assertNotIn("version", renderer)
+
+    def test_recent_audit_uses_current_projection_evidence_and_labels_live_context(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        renderer = js[js.index("function renderRecentFlow(tasks)"):js.index("function renderSimpleList")]
+        self.assertIn("taskProjection(task)", renderer)
+        self.assertIn("projection.audit_rows", renderer)
+        self.assertIn("pm_live_notes: '비결정 맥락'", js)
+        self.assertNotIn("modified_at", renderer)
+        self.assertNotIn("mergeFlow(", renderer)
+
+    def test_secondary_agent_context_is_collapsed_and_after_recent_audit(self):
+        recent = self.source.index('id="recentAudit"')
+        secondary = self.source.index('id="secondaryAgentContext"')
+        self.assertLess(recent, secondary)
+        self.assertIn('<details id="secondaryAgentContext"', self.source)
+        self.assertNotIn('<details id="secondaryAgentContext" open', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()
