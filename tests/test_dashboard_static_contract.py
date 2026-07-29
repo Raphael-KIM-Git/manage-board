@@ -86,6 +86,17 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertNotIn("card.append(liveWrap)", card)
         self.assertIn("extra.append(renderStageChips(task, compactHideGateDetails))", card)
 
+    def test_task_cards_only_expose_read_only_detail_actions(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        card = js[js.index("function createTaskCard(task)"):js.index("function renderTasks(tasks)")]
+        self.assertIn("cardDetailActionLabel(task)", card)
+        self.assertIn("openTaskDetail(task, taskDetailBtn)", card)
+        for forbidden in ("재전송", "다시 전송", "live-note", "라이브 노트", "final review", "최종 검토", "gateOverride(", "finalReviewOverride("):
+            self.assertNotIn(forbidden, card.lower() if forbidden.isascii() else card)
+        helper = js[js.index("function cardDetailActionLabel"):js.index("function humanStatus")]
+        self.assertIn("업무 상세", helper)
+        self.assertRegex(helper, r"재전송|다시\\s\\*전송")
+
     def test_card_projection_helpers_fail_safe_without_projection(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
         self.assertIn("return task.dashboard_projection || fallbackProjection(task);", js)

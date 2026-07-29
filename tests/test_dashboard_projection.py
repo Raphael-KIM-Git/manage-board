@@ -4,6 +4,7 @@ import unittest
 from operations_dashboard_projection import (
     build_dashboard_summary,
     classify_raw,
+    project_progress,
     project_task,
 )
 
@@ -26,6 +27,104 @@ class DashboardProjectionTests(unittest.TestCase):
         }
         task.update(overrides)
         return task
+
+    def progress_task(self, **overrides):
+        task = {
+            "task_id": "T-PROGRESS",
+            "status": "in_progress",
+            "stages": [{"id": "writing", "status": "in_progress", "agents": ["writer-co"]}],
+            "dispatches": {"writer-co": "dispatched"},
+            "result_files": [],
+            "result_metadata": [],
+            "verification_files": [],
+        }
+        task.update(overrides)
+        return task
+
+    def result(self, worker="writer-co", stage="writing", status="completed", report="T-PROGRESS-writing-worker.md"):
+        return {
+            "name": report,
+            "metadata": {"task_id": "T-PROGRESS", "worker": worker, "stage_id": stage, "status": status, "report_file": report},
+        }
+
+    def test_progress_ten_prd_safety_scenarios(self):
+        # 1: dispatch only never becomes a result.
+        p = project_progress(self.progress_task())
+        self.assertEqual(p["agent_states"]["writing"]["writer-co"], "dispatch_confirmed")
+        self.assertEqual(p["next_pm_action"]["kind"], "wait_for_result")
+        # 2: partial results stay partial and do not complete the stage.
+        partial = self.progress_task(stages=[{"id": "writing", "status": "in_progress", "agents": ["a", "b", "c"]}], dispatches={"a": "dispatched", "b": "dispatched", "c": "dispatched"}, result_files=[{"name": "T-PROGRESS-writing-a.md"}], result_metadata=[self.result("a", report="T-PROGRESS-writing-a.md")])
+        pp = project_progress(partial)
+        self.assertEqual(pp["agent_states"]["writing"]["_maturity"], "partial_received")
+        self.assertNotEqual(pp["agent_states"]["writing"]["_raw_status"], "completed")
+        # 3: all results are reviewable while raw stage remains in progress.
+        complete = self.progress_task(stages=[{"id": "writing", "status": "in_progress", "agents": ["writer-co"]}], result_files=[{"name": "T-PROGRESS-writing-worker.md"}], result_metadata=[self.result()])
+        cp = project_progress(complete)
+        self.assertEqual(cp["agent_states"]["writing"]["writer-co"], "result_received")
+        self.assertEqual(cp["agent_states"]["writing"]["_maturity"], "reviewable")
+        # 4: failed metadata wins over dispatched.
+        failed = project_progress(self.progress_task(result_files=[{"name": "T-PROGRESS-writing-worker.md"}], result_metadata=[self.result(status="failed")]))
+        self.assertEqual(failed["agent_states"]["writing"]["writer-co"], "failed_or_blocked")
+        self.assertEqual(failed["next_pm_action"]["kind"], "blocked")
+        # 5: unlinked worker/stage is unknown, not dispatch confirmed.
+        unknown = self.progress_task(result_files=[{"name": "stray.md"}], result_metadata=[self.result(worker="other", stage="research", report="stray.md")])
+        unknown_projection = project_progress(unknown)
+        self.assertEqual(unknown_projection["agent_states"]["writing"]["writer-co"], "unknown")
+        self.assertIn("귀속", unknown_projection["agent_states"]["writing"]["_limitations"]["writer-co"])
+        self.assertEqual(unknown_projection["next_pm_action"]["kind"], "unknown")
+        self.assertTrue(unknown_projection["ambiguous_files"])
+        # Explicitly unrelated metadata must not downgrade a different stage's agents.
+        unrelated = self.progress_task(
+            stages=[
+                {"id": "research", "status": "completed", "agents": ["researcher-co"]},
+                {"id": "writing", "status": "in_progress", "agents": ["writer-co"]},
+            ],
+            result_files=[{"name": "research.md"}],
+            result_metadata=[self.result(worker="other", stage="research", report="research.md")],
+        )
+        unrelated_projection = project_progress(unrelated)
+        self.assertEqual(unrelated_projection["agent_states"]["research"]["researcher-co"], "not_dispatched")
+        filename_only = project_progress(self.progress_task(result_files=[{"name": "filename-only.md"}]))
+        self.assertEqual(filename_only["agent_states"]["writing"]["writer-co"], "unknown")
+        self.assertEqual(filename_only["next_pm_action"]["kind"], "unknown")
+        # 6: md/json sidecar is one bundle.
+        bundle = project_progress(complete)
+        self.assertEqual(len(bundle["bundles"]), 1)
+        self.assertEqual(len(bundle["bundles"][0]["files"]), 2)
+        # 7: verification file without binding is not verified.
+        no_binding = self.progress_task(verification_files=[{"metadata": {"status": "completed"}}])
+        self.assertEqual(project_progress(no_binding)["verification_state"], "available_unstructured")
+        # 8: matching verdict and binding is verified.
+        bound = self.progress_task(result_files=[{"name": "T-PROGRESS-writing-worker.md"}], result_metadata=[self.result()], verification_metadata=[{"metadata": {"status": "completed", "artifact_id": "T-PROGRESS-writing-worker.md"}}], verification_files=[{"name": "v.json"}])
+        self.assertEqual(project_progress(bound)["verification_state"], "verified")
+        # 9: live note is not consulted.
+        noted = self.progress_task(pm_live_notes=[{"note": "승인 완료"}])
+        self.assertEqual(project_progress(noted)["agent_states"]["writing"]["writer-co"], "dispatch_confirmed")
+        # 10: missing/null/future status remains fail-safe.
+        for raw in ({}, {"status": None}, {"status": "future"}):
+            self.assertIn(project_progress(self.progress_task(**raw))["next_pm_action"]["kind"], {"wait_for_result", "progress"})
+
+    def test_representative_task_contract(self):
+        task = {
+            "task_id": "T-20260729-001", "status": "dispatched",
+            "stages": [
+                {"id": "research", "status": "completed", "agents": ["HermesResearcher", "researcher-co", "researcher_agent"]},
+                {"id": "writing", "status": "in_progress", "agents": ["writer-co"]},
+                {"id": "verification", "status": "planned", "agents": ["verify-co"]},
+                {"id": "final_write", "status": "skipped", "agents": ["writer-co"]},
+            ],
+            "dispatches": {"writer-co": "dispatched"},
+            "result_files": [{"name": f"T-20260729-001__{w}.md"} for w in ("HermesResearcher", "researcher-co", "researcher_agent")],
+            "result_metadata": [{"name": f"T-20260729-001__{w}.json", "metadata": {"task_id": "T-20260729-001", "worker": w, "stage_id": "research", "status": "completed", "report_file": f"T-20260729-001__{w}.md"}} for w in ("HermesResearcher", "researcher-co", "researcher_agent")],
+            "verification_files": [],
+        }
+        projection = project_task(task)
+        progress = projection["progress"]
+        self.assertEqual(progress["current_stage"], "writing")
+        self.assertEqual(progress["agent_states"]["research"]["_received"], 3)
+        self.assertEqual(progress["agent_states"]["writing"]["writer-co"], "dispatch_confirmed")
+        self.assertEqual(progress["next_pm_action"]["label"], "작성 결과 도착 확인")
+        self.assertEqual(projection["verification_summary"]["state"], "not_run")
 
     def test_missing_null_unknown_are_distinct(self):
         self.assertEqual(classify_raw({}, "pipeline_shape")["state"], "missing")

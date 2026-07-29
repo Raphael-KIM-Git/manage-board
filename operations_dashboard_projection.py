@@ -123,6 +123,167 @@ def project_artifacts(task: dict, result_files: list[dict], verification_files: 
     return {"artifact": artifact, "verification": verification}
 
 
+def _safe_result_metadata(task: dict) -> list[dict]:
+    """Return sidecar metadata only when it is already present in the API view."""
+    values = task.get("result_metadata") or []
+    return [item for item in values if isinstance(item, dict) and isinstance(item.get("metadata"), dict)]
+
+
+def _stage_from_name(name: str, task_id: str) -> str | None:
+    lowered = name.lower()
+    for marker, stage in (("-writing", "writing"), ("-verify", "verification"),
+                          ("-verification", "verification"), ("-final", "final_write")):
+        if marker in lowered:
+            return stage
+    return "research" if lowered.startswith(task_id.lower()) else None
+
+
+def _result_progress(task: dict) -> dict:
+    stages = task.get("stages") or []
+    expected_agents = {stage.get("id"): set(stage.get("agents") or []) for stage in stages if stage.get("id")}
+    files = {item.get("name"): item for item in task.get("result_files") or [] if isinstance(item, dict)}
+    bundles: dict[str, dict] = {}
+    ambiguous = []
+    scoped_unknown: dict[str, set[str]] = {}
+    for sidecar in _safe_result_metadata(task):
+        metadata = sidecar["metadata"]
+        if metadata.get("task_id") != task.get("task_id"):
+            ambiguous.append({"name": sidecar.get("name"), "reason": "task_id mismatch or missing"})
+            continue
+        worker = metadata.get("worker") or metadata.get("worker_name")
+        report = metadata.get("report_file")
+        stage = metadata.get("stage_id") or metadata.get("stage") or _stage_from_name(str(report or sidecar.get("name", "")), str(task.get("task_id", "")))
+        if not worker or not report or report not in files or stage not in expected_agents or worker not in expected_agents[stage]:
+            ambiguous.append({"name": sidecar.get("name"), "reason": "worker/stage/report_file unlinked", "stage": stage, "worker": worker})
+            if isinstance(stage, str) and stage in expected_agents and worker in expected_agents[stage]:
+                scoped_unknown.setdefault(stage, set()).add(worker)
+            continue
+        key = f"{stage}::{worker}"
+        bundle = bundles.setdefault(key, {"stage": stage, "worker": worker, "files": [], "status": None, "metadata": metadata})
+        bundle["files"].extend([sidecar.get("name"), report])
+        status = metadata.get("status")
+        if status in {"failed", "blocked"}:
+            bundle["status"] = "failed_or_blocked"
+        elif bundle["status"] != "failed_or_blocked" and status == "completed":
+            bundle["status"] = "result_received"
+        else:
+            bundle["status"] = "unknown"
+    stage_states = {}
+    for stage, workers in expected_agents.items():
+        states = {}
+        for worker in workers:
+            bundle = bundles.get(f"{stage}::{worker}")
+            if bundle:
+                states[worker] = bundle["status"]
+            else:
+                dispatch = (task.get("dispatches") or {}).get(worker)
+                states[worker] = "dispatch_confirmed" if dispatch in {"dispatched", "dispatch_confirmed"} else "not_dispatched"
+        stage_bundles = [bundle for bundle in bundles.values() if bundle["stage"] == stage]
+        received = sum(bundle["status"] == "result_received" for bundle in stage_bundles)
+        failed = any(bundle["status"] == "failed_or_blocked" for bundle in stage_bundles)
+        if failed:
+            maturity = "ambiguous"
+        elif received == 0:
+            maturity = "none"
+        elif received < len(workers):
+            maturity = "partial_received"
+        else:
+            maturity = "reviewable"
+        states["_maturity"] = maturity
+        states["_received"] = received
+        states["_expected"] = len(workers)
+        states["_failed"] = failed
+        # Preserve explicit stage completion separately from artifact maturity.
+        states["_raw_status"] = next((s.get("status") for s in stages if s.get("id") == stage), None)
+        states["_bundles"] = stage_bundles
+        states["_ambiguous"] = [item for item in ambiguous if item.get("name")]
+        states["_dispatch"] = {worker: (task.get("dispatches") or {}).get(worker) for worker in workers}
+        stage_states[stage] = states
+    referenced = {name for bundle in bundles.values() for name in bundle["files"] if name}
+    for name in files:
+        if name not in referenced:
+            ambiguous.append({"name": name, "reason": "result file has no safely linked metadata"})
+    # A filename-only/unlinked artifact cannot be safely attributed to a worker.
+    # Limit the downgrade to dispatched workers in the active stage; explicit
+    # evidence scoped to another stage must not poison unrelated agents.
+    if any(item.get("reason") == "result file has no safely linked metadata" for item in ambiguous):
+        active = next((stage for stage in stages if stage.get("status") in {"in_progress", "entry_hold", "gate_hold"}), None)
+        if active and active.get("id") in expected_agents:
+            stage_id = active["id"]
+            dispatched = {worker for worker in expected_agents[stage_id]
+                          if (task.get("dispatches") or {}).get(worker) in {"dispatched", "dispatch_confirmed"}}
+            if dispatched:
+                scoped_unknown.setdefault(stage_id, set()).update(dispatched)
+    limitation = "결과 파일의 작업자·단계 귀속을 안전하게 확인할 수 없음"
+    for stage, workers in scoped_unknown.items():
+        states = stage_states.get(stage)
+        if not states:
+            continue
+        for worker in workers:
+            if states.get(worker) in {"dispatch_confirmed", "not_dispatched"}:
+                states[worker] = "unknown"
+                states.setdefault("_limitations", {})[worker] = limitation
+        if workers:
+            states["_maturity"] = "ambiguous"
+    return {"stages": stage_states, "bundles": list(bundles.values()), "ambiguous": ambiguous}
+
+
+def _verification_state(task: dict, progress: dict, artifacts: dict) -> str:
+    files = task.get("verification_files") or task.get("verification_metadata") or []
+    if not files:
+        return "not_run"
+    # Verification files are never verified merely because they exist.
+    for item in task.get("verification_metadata") or task.get("verification_files") or []:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        verdict = metadata.get("verdict") or metadata.get("status")
+        binding = metadata.get("artifact_id") or metadata.get("result_artifact_id") or metadata.get("artifact_version")
+        if verdict in {"verified", "passed", "meets", "complete", "completed"} and binding:
+            for bundle in progress["bundles"]:
+                candidate = bundle.get("metadata") or {}
+                if binding in {candidate.get("artifact_id"), candidate.get("artifact_version"), candidate.get("report_file")}:
+                    return "verified"
+    return "available_unstructured"
+
+
+def project_progress(task: dict) -> dict:
+    progress = _result_progress(task)
+    current = next((stage for stage in task.get("stages") or [] if stage.get("status") in {"in_progress", "entry_hold", "gate_hold"}), None)
+    current_id = current.get("id") if current else None
+    current_state = progress["stages"].get(current_id, {}) if current_id else {}
+    verification = _verification_state(task, progress, { })
+    hold = _active_hold(task)
+    failed = any(state.get("_failed") for state in progress["stages"].values())
+    unknown = bool(progress["ambiguous"] or any(state.get("_maturity") == "ambiguous" for state in progress["stages"].values()))
+    dispatch_wait = any((current_state.get("_dispatch") or {}).get(worker) in {"dispatched", "dispatch_confirmed"}
+                        and current_state.get(worker) not in {"result_received", "failed_or_blocked"}
+                        for worker in (current_state.get("_dispatch") or {}))
+    missing_dispatch = any(current_state.get(worker) in {"not_dispatched", "unknown"}
+                           for worker in (current_state.get("_dispatch") or {}))
+    if hold or failed:
+        action = {"kind": "blocked", "label": "차단 근거 확인", "scope": current_id or "task", "target": "task_detail"}
+    elif unknown:
+        action = {"kind": "unknown", "label": "raw 상태 확인", "scope": current_id or "task", "target": "task_detail"}
+    elif missing_dispatch:
+        action = {"kind": "dispatch", "label": "전송 상태 확인", "scope": current_id or "task", "target": "task_detail"}
+    elif dispatch_wait:
+        action = {"kind": "wait_for_result", "label": "작성 결과 도착 확인" if current_id == "writing" else "결과 도착 확인", "scope": f"stage:{current_id}", "target": "task_detail"}
+    elif current_state.get("_maturity") == "partial_received":
+        action = {"kind": "partial", "label": "미도착 결과 확인", "scope": f"stage:{current_id}", "target": "task_detail"}
+    elif current_state.get("_maturity") == "reviewable" and verification == "not_run":
+        action = {"kind": "verification", "label": "검증 시작/확인", "scope": f"stage:{current_id}", "target": "task_detail"}
+    elif verification == "verified" and not task.get("pm_final_review"):
+        action = {"kind": "final_review", "label": "최종 검토", "scope": "final-review", "target": "task_detail"}
+    elif task.get("status") in {"completed", "cancelled"}:
+        action = {"kind": "done", "label": "결과 보기", "scope": "task", "target": "task_detail"}
+    else:
+        action = {"kind": "progress", "label": "진행 상세 보기", "scope": current_id or "task", "target": "task_detail"}
+    return {"schema_version": 1, "current_stage": current_id, "agent_states": progress["stages"],
+            "bundles": progress["bundles"], "ambiguous_files": progress["ambiguous"],
+            "verification_state": verification, "next_pm_action": action}
+
+
 def _decision_queue(group: str, hold: dict | None, final: dict, artifacts: dict, task: dict) -> dict | None:
     if hold:
         return {"kind": "active_hold", "question": "진행을 위해 활성 보류를 확인해 주세요", "scope": hold["scope"], "reason": hold.get("reason"), "primary_action": "게이트 상세 보기"}
@@ -140,6 +301,7 @@ def project_task(task_view: dict) -> dict:
     gates = project_gate_rows(task)
     final = project_final_review(task)
     artifacts = project_artifacts(task, task.get("result_files") or [], task.get("verification_files") or [])
+    progress = project_progress(task)
     hold = _active_hold(task)
     quality = [pipeline["quality"]] if pipeline.get("quality") else []
     status_quality = classify_raw(task, "status", {"queued", "planned", "dispatched", "partially_dispatched", "results_received", "waiting_verification", "needs_pm_review", "completed", "cancelled", "dispatch_blocked", "dispatch_failed", "in_progress"})
@@ -176,15 +338,22 @@ def project_task(task_view: dict) -> dict:
         audit_rows.append(_row("pm_final_review", final.get("raw_verdict"), "final-review", final.get("normalized_decision"), final.get("confidence", "unavailable")))
     if override in {"accept", "rework"}:
         audit_rows.append(_row("final_review_override", override, "final-review", "approve" if override == "accept" else "rework"))
+    decision_queue = _decision_queue(group["value"], hold, final, artifacts, task)
+    if decision_queue is None or (progress["next_pm_action"]["kind"] in {"blocked", "unknown"} and final.get("raw_verdict") != "not_meets"):
+        decision_queue = progress["next_pm_action"]
+    verification_summary = artifacts["verification"]
+    if progress["verification_state"] == "verified":
+        verification_summary = {**verification_summary, "state": "verified"}
     return {
         "schema_version": 1,
         "work_group": group["value"],
         "work_group_detail": group,
         "pipeline_shape": pipeline,
-        "decision_queue_item": _decision_queue(group["value"], hold, final, artifacts, task),
+        "decision_queue_item": decision_queue,
         "task_card": {"title": task.get("title", ""), "objective": task.get("objective", ""), "status": task.get("status"), "work_group": group["value"], "updated_at": task.get("updated_at")},
         "artifact_summary": artifacts["artifact"],
-        "verification_summary": artifacts["verification"],
+        "verification_summary": verification_summary,
+        "progress": progress,
         "authority_summary": {"effective_final_approved": effective_final, "label": "현재 raw 근거", "history": "history_unavailable"},
         "audit_rows": audit_rows,
         "data_quality": quality,

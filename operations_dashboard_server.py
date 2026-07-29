@@ -645,6 +645,26 @@ def task_related_files(task_id: str, directory: Path) -> list[dict]:
     return items
 
 
+def result_metadata(task_id: str, files: list[dict]) -> list[dict]:
+    """Expose only safe correlation fields from result JSON sidecars."""
+    safe = {'task_id', 'worker', 'worker_name', 'status', 'verdict', 'report_file', 'stage', 'stage_id',
+            'artifact_id', 'artifact_version', 'attempt_id', 'result_artifact_id', 'result_version'}
+    output = []
+    for item in files:
+        if not item.get('name', '').lower().endswith('.json'):
+            continue
+        try:
+            data = load_json(Path(item['path']))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        metadata = {key: data[key] for key in safe if key in data}
+        if metadata:
+            output.append({'name': item['name'], 'metadata': metadata})
+    return output
+
+
 def default_pipeline_stages(task_id: str, deliverable: str, reviewer: str) -> list[dict]:
     return [
         {
@@ -735,7 +755,9 @@ def build_task_view(task: dict) -> dict:
         'pipeline': pipeline,
         'last_error': task.get('last_error'),
         'result_files': result_files,
+        'result_metadata': result_metadata(task_id, result_files),
         'verification_files': verification_files,
+        'verification_metadata': result_metadata(task_id, verification_files),
         'digest_files': digest_files,
         'interview': task.get('interview'),
         'seed': task.get('seed'),

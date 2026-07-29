@@ -85,6 +85,18 @@ function singlePrimaryAction(item) {
   return item?.primary_action || '상세 보기';
 }
 
+function cardDetailActionLabel(task) {
+  const progressAction = taskProjection(task).progress?.next_pm_action;
+  const queueAction = taskProjection(task).decision_queue_item;
+  const label = progressAction?.label || queueAction?.primary_action;
+  // Cards are a read-only overview. Older projections may still carry a
+  // mutation-oriented label; never surface that label as a card control.
+  if (!label || /재전송|다시\s*전송|게이트|live\s*note|라이브\s*노트|final\s*review|최종\s*검토|승인|override/i.test(label)) {
+    return '업무 상세';
+  }
+  return label;
+}
+
 function humanStatus(status) {
   const map = {
     completed: '완료',
@@ -400,26 +412,137 @@ function taskProjection(task) {
   return task.dashboard_projection || fallbackProjection(task);
 }
 
+function stageCounts(task) {
+  const stages = task?.stages || [];
+  return {
+    completed: stages.filter((stage) => stage.status === 'completed').length,
+    skipped: stages.filter((stage) => stage.status === 'skipped').length,
+    total: stages.length,
+  };
+}
+
 function taskProgressSummary(task) {
-  const pipeline = task.pipeline;
-  if (pipeline?.current_stage) {
-    const completed = Number(pipeline.completed_stages || 0);
-    const total = Number(pipeline.stage_count || 0);
-    return total ? `${pipeline.current_stage} · ${completed}/${total} 단계 완료` : `현재 단계: ${pipeline.current_stage}`;
-  }
   const stages = task.stages || [];
   if (!stages.length) return '진행 단계 확인 불가';
-  const done = stages.filter((stage) => stage.status === 'completed' || stage.status === 'skipped').length;
+  const counts = stageCounts(task);
+  const completed = counts.completed;
+  const skipped = counts.skipped;
   const current = stages.find((stage) => ['in_progress', 'gate_hold', 'entry_hold'].includes(stage.status));
-  return current ? `${current.label || '현재 단계'} · ${done}/${stages.length} 단계 완료` : `${done}/${stages.length} 단계 완료`;
+  const location = current ? `${stageDisplayLabel(current)} 진행 중` : '현재 단계 확인 불가';
+  return `${location} · 완료 ${completed}/${stages.length} · 생략 ${skipped}`;
+}
+
+function currentStageForTask(task) {
+  return (task.stages || []).find((stage) => ['in_progress', 'gate_hold', 'entry_hold'].includes(stage.status)) || null;
+}
+
+function stageDisplayLabel(stage) {
+  const labels = { research: '리서치', writing: '작성', verification: '검증', final_write: '최종 작성' };
+  return labels[stage?.id] || stage?.label || stage?.id || '단계 확인 불가';
+}
+
+function resultBundleKey(file) {
+  const parsed = parseResultFileName(file?.name || '');
+  if (!parsed) return null;
+  return `${parsed.stagePart}__${parsed.worker}`;
+}
+
+function resultBundles(task) {
+  const groups = new Map();
+  (task.result_files || []).forEach((file) => {
+    const key = resultBundleKey(file);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, { key, worker: file.name.split('__')[1]?.split('.')[0] || 'unknown', files: [] });
+    groups.get(key).files.push(file);
+  });
+  return [...groups.values()];
+}
+
+function stageResultBundles(task, stage) {
+  if (!stage) return [];
+  return resultBundles(task).filter((bundle) => bundle.files.some((file) => {
+    const parsed = parseResultFileName(file.name);
+    return parsed && (parsed.stagePart === stage.id || parsed.stagePart === `${task.task_id}-${stage.id}` || (stage.id === 'research' && parsed.stagePart === task.task_id));
+  }));
+}
+
+function dispatchStateFor(task, worker) {
+  const dispatches = task.dispatches || {};
+  const match = Object.entries(dispatches).find(([name]) => name.toLowerCase() === String(worker).toLowerCase());
+  return match ? match[1] : null;
+}
+
+function agentExecutionState(task, stage, worker) {
+  const projected = taskProjection(task).progress?.agent_states?.[stage?.id];
+  if (projected && projected[worker]) return projected[worker];
+  const bundle = stageResultBundles(task, stage).find((item) => item.worker.toLowerCase() === String(worker).toLowerCase());
+  const dispatch = dispatchStateFor(task, worker);
+  const metadataStatus = bundle?.files.map((file) => file.status || file.metadata?.status).find(Boolean);
+  if (['failed', 'blocked'].includes(metadataStatus) || ['dispatch_failed', 'dispatch_blocked', 'failed', 'blocked'].includes(dispatch)) return 'failed_or_blocked';
+  if (metadataStatus === 'completed' || bundle) return 'result_received';
+  if (['dispatched', 'dispatch_confirmed'].includes(dispatch)) return 'dispatch_confirmed';
+  if (dispatch) return 'unknown';
+  return 'not_dispatched';
+}
+
+function agentExecutionLabel(state) {
+  return {
+    not_dispatched: '미전송',
+    dispatch_confirmed: '전송 확인 · 결과 대기',
+    result_received: '결과 도착',
+    failed_or_blocked: '실패·차단',
+    unknown: '상태 확인 불가',
+  }[state] || '상태 확인 불가';
+}
+
+function agentExecutionLimitation(task, stage, worker, state) {
+  const limitation = taskProjection(task).progress?.agent_states?.[stage?.id]?._limitations?.[worker];
+  if (limitation) return limitation;
+  if (state === 'dispatch_confirmed') return '실행·결과 미확인';
+  if (state === 'result_received') return '근거 품질 미분류';
+  return '추가 확인 필요';
+}
+
+function stageArtifactState(task, stage) {
+  const projected = taskProjection(task).progress?.agent_states?.[stage?.id];
+  if (projected?._maturity) return projected._maturity;
+  const received = stageResultBundles(task, stage).length;
+  const expected = (stage?.agents || []).length;
+  if (!received) return 'none';
+  if (expected && received < expected) return 'partial_received';
+  return 'reviewable';
+}
+
+function taskAgentSummary(task) {
+  const current = currentStageForTask(task);
+  if (!current) return '에이전트 계획 확인 불가';
+  const stages = task.stages || [];
+  const currentIndex = stages.indexOf(current);
+  const agents = current.agents || [];
+  const labels = agents.map((agent) => `${agent} · ${agentExecutionLabel(agentExecutionState(task, current, agent))}`);
+  const preceding = stages.slice(0, currentIndex).reverse().find((stage) => stage.status === 'completed');
+  const precedingText = preceding ? `${stageDisplayLabel(preceding)} 완료 · ${stageArtifactState(task, preceding) === 'reviewable' ? '결과 도착' : '결과 확인 필요'}` : '';
+  return [precedingText, labels.length ? labels.join(' · ') : '에이전트 계획 확인 불가'].filter(Boolean).join(' · ');
 }
 
 function taskArtifactSummary(task) {
-  const artifact = taskProjection(task).artifact_summary || {};
+  const projection = taskProjection(task);
+  const progress = projection.progress;
+  if (progress) {
+    const stages = task.stages || [];
+    const current = currentStageForTask(task);
+    const currentState = current ? progress.agent_states?.[current.id]?._maturity : null;
+    const preceding = current && stages.slice(0, stages.indexOf(current)).reverse().find((stage) => stage.status === 'completed');
+    const parts = [];
+    if (preceding) parts.push(`${stageDisplayLabel(preceding)} ${progress.agent_states?.[preceding.id]?._maturity === 'reviewable' ? '결과 도착' : '결과 확인 필요'}`);
+    if (current) parts.push(`${stageDisplayLabel(current)} ${currentState === 'none' ? '결과 없음' : currentState === 'partial_received' ? '결과 일부 도착' : currentState === 'reviewable' ? '결과 도착' : '범위 확인 필요'}`);
+    const verification = progress.verification_state === 'not_run' ? '검증 미실행' : progress.verification_state === 'verified' ? '검증 완료' : '검증 근거 확인 필요';
+    if (parts.length || verification) return `${parts.join(' · ')}${parts.length ? ' · ' : ''}${verification}`;
+  }
+  const artifact = projection.artifact_summary || {};
   if (artifact.state === 'ambiguous') return '산출물 후보 여러 개 · 범위 확인 필요';
-  if (artifact.latest?.name) return `최근 산출물 · ${artifact.latest.name}`;
-  if (artifact.items?.length) return `산출물 ${artifact.items.length}개 확인 가능`;
-  return '아직 확인 가능한 산출물 없음';
+  if (!artifact.items?.length && !task.result_files?.length) return '아직 확인 가능한 산출물 없음';
+  return artifact.state === 'available' ? '산출물 도착 · 검토 필요' : '산출물 범위 확인 필요';
 }
 
 function taskTrustSummary(task) {
@@ -439,13 +562,17 @@ function createTaskCard(task) {
   const outcome = el('div', 'task-outcome');
   outcome.append(el('div', 'task-title', task.title || task.task_id || '제목 없음'));
   outcome.append(el('div', 'task-why', isDone ? agentsUsedSummary(task) : (task.objective || '상세 목표 없음')));
-  outcome.append(el('div', 'task-submeta', `${humanStatus(task.status)} · ${task.updated_at || task.created_at || '시간 미상'}`));
+  outcome.append(el('div', 'task-submeta', `${task.updated_at || task.created_at || '시간 미상'}`));
   card.append(outcome);
 
   const progress = el('div', 'task-card-fact task-progress');
   progress.append(el('span', 'task-fact-label', '진행'));
   progress.append(el('span', 'task-fact-value', taskProgressSummary(task)));
   card.append(progress);
+  const agent = el('div', 'task-card-fact task-agent-progress');
+  agent.append(el('span', 'task-fact-label', '에이전트 진행'));
+  agent.append(el('span', 'task-fact-value', taskAgentSummary(task)));
+  card.append(agent);
   const pipeline = pipelineShapePresentation(task);
   if (pipeline.label) card.append(el('div', 'task-pipeline-label', `파이프라인 · ${pipeline.label}`));
   const artifact = el('div', 'task-card-fact task-artifact');
@@ -456,12 +583,17 @@ function createTaskCard(task) {
   trust.append(el('span', 'task-fact-label', '신뢰'));
   trust.append(el('span', 'task-fact-value', taskTrustSummary(task)));
   card.append(trust);
+  const limits = el('div', 'task-card-fact task-limits');
+  limits.append(el('span', 'task-fact-label', '근거/한계'));
+  limits.append(el('span', 'task-fact-value', (taskProjection(task).data_quality || []).slice(0, 2).map(dataQualityLabel).join(' · ') || '근거 품질 미분류'));
+  card.append(limits);
   const authority = authorityPresentation(taskProjection(task));
   card.append(el('div', `data-authority ${authority.className}`, `권한 · ${authority.label}`));
 
   const compactHideGateDetails = taskProjection(task).compact_hide_gate_details ?? isDone;
   const extra = el('div', 'task-extra');
   extra.append(renderStageChips(task, compactHideGateDetails));
+  extra.append(el('div', 'task-agent-summary', taskAgentSummary(task)));
   extra.append(renderSeedWorkflow(task));
   if (task.pm_final_review && task.pm_final_review.verdict) {
     const fr = task.pm_final_review;
@@ -497,6 +629,7 @@ function createTaskCard(task) {
   if (task.dispatches && Object.keys(task.dispatches).length) {
     links.append(el('div', 'task-linkline', `전송 흐름: ${Object.entries(task.dispatches).map(([k, v]) => `${k}=${v}`).join(' · ')}`));
   }
+  links.append(el('div', 'task-linkline', `raw task: ${task.status || '확인 불가'}`));
   if (links.childNodes.length) extra.append(links);
 
   const workerResults = renderWorkerResults(task);
@@ -518,16 +651,10 @@ function createTaskCard(task) {
     extra.classList.toggle('is-collapsed', !nowOpen);
     toggleBtn.textContent = nowOpen ? '간단히 보기' : '상세 보기';
   });
-  const taskDetailBtn = el('button', 'mini-btn', '업무 상세');
+  const taskDetailBtn = el('button', 'mini-btn', cardDetailActionLabel(task));
   taskDetailBtn.type = 'button';
   taskDetailBtn.addEventListener('click', () => openTaskDetail(task, taskDetailBtn));
-  const btn = el('button', 'mini-btn', '다시 전송');
-  btn.disabled = ['completed', 'cancelled'].includes(task.status);
-  btn.addEventListener('click', () => dispatchTask(task.task_id, btn));
   actionRow.append(taskDetailBtn, toggleBtn);
-  const detailActions = el('div', 'task-actions task-detail-actions');
-  detailActions.append(btn);
-  extra.append(detailActions);
   card.append(actionRow);
 
   return card;
@@ -1165,7 +1292,7 @@ function renderTaskStageTimeline(task) {
   const stages = task?.stages || [];
   stages.forEach((stage) => {
     const row = el('div', 'stage-timeline-summary-row');
-    row.append(el('span', 'stage-timeline-summary-stage', detailValue(stage.label || stage.id, '단계 확인 불가')));
+    row.append(el('span', 'stage-timeline-summary-stage', stageDisplayLabel(stage)));
     row.append(el('span', 'stage-timeline-summary-status', humanStatus(stage.status || 'unknown')));
     const agents = el('span', 'stage-timeline-summary-agents');
     (stage.agents || []).forEach((agent) => agents.append(el('span', 'chip', agent)));
@@ -1176,6 +1303,37 @@ function renderTaskStageTimeline(task) {
     root.append(row);
   });
   if (!stages.length) root.append(el('p', 'empty', '진행 단계 확인 불가'));
+  return root;
+}
+
+function renderAgentExecution(task) {
+  const root = el('div', 'agent-execution-table');
+  (task?.stages || []).forEach((stage) => {
+    (stage.agents || []).forEach((worker) => {
+      const state = agentExecutionState(task, stage, worker);
+      const row = el('div', `agent-execution-row agent-${state}`);
+      row.append(el('span', 'agent-execution-worker', worker));
+      row.append(el('span', 'agent-execution-stage', stageDisplayLabel(stage)));
+      row.append(el('span', 'agent-execution-dispatch', dispatchStateFor(task, worker) || '전송 이력 없음'));
+      row.append(el('span', 'agent-execution-result', agentExecutionLabel(state)));
+      row.append(el('span', 'agent-execution-limit', agentExecutionLimitation(task, stage, worker, state)));
+      root.append(row);
+    });
+  });
+  if (!root.childNodes.length) root.append(el('p', 'empty', '에이전트 계획 확인 불가'));
+  return root;
+}
+
+function renderEvidenceLimits(task) {
+  const root = el('div', 'evidence-limits');
+  const state = stageArtifactState(task, currentStageForTask(task));
+  const verification = taskProjection(task).verification_summary;
+  const lines = [
+    state === 'partial_received' ? '결과 일부 도착 · 단계 완결성 미확인' : state === 'reviewable' ? '결과 도착 · 근거 품질 미분류' : '현재 단계 결과 없음',
+    verification?.state === 'not_run' ? '검증 미실행' : '검증 근거는 원시 파일에서 확인',
+    '검색 스니펫·자유 텍스트만으로 직접 검증 완료를 추론하지 않음',
+  ];
+  lines.forEach((line) => root.append(el('p', 'evidence-limit-item', line)));
   return root;
 }
 
@@ -1385,13 +1543,20 @@ function renderTaskDetail(task) {
   outcome.append(el('p', 'task-detail-meta', `${humanStatus(task.status)} · ${detailValue(task.updated_at || task.created_at, '시간 확인 불가')}`));
   body.append(detailSection('Outcome', 'task-detail-outcome', outcome));
 
+  const progress = taskProjection(task).progress || {};
+  const progressOverview = el('div', 'task-detail-copy');
+  progressOverview.append(el('p', 'task-detail-lead', taskProgressSummary(task)));
+  progressOverview.append(el('p', 'task-detail-meta', `다음 PM 조치 · ${progress.next_pm_action?.label || '진행 상세 보기'}`));
+  body.append(detailSection('Progress overview', 'task-detail-progress-section', progressOverview));
+
   const stage = el('div', 'task-detail-stage');
   stage.append(renderTaskStageTimeline(task));
   body.append(detailSection('Stage timeline', 'task-detail-stage-section', stage));
-  if (!['completed', 'cancelled'].includes(task.status)) body.append(renderTaskLiveNoteContext(task));
+  body.append(detailSection('Agent execution', 'task-detail-agent-section', renderAgentExecution(task)));
 
   // Evidence-first sections: 'Artifacts' -> 'Verification'.
   body.append(renderArtifactReviewPanel(task, projection));
+  body.append(detailSection('Evidence quality & limits', 'task-detail-evidence-section', renderEvidenceLimits(task)));
 
   const authority = el('div', 'task-detail-copy');
   const authorityInfo = authorityPresentation(projection);
@@ -1401,6 +1566,7 @@ function renderTaskDetail(task) {
   authority.append(el('p', 'task-detail-meta', audit.length ? `현재 raw 감사 근거 ${audit.length}건` : '현재 raw 감사 이력 복구 불가'));
   authority.append(renderRawGateAudit(projection));
   body.append(detailSection('Authority / Audit', 'task-detail-authority-audit', authority));
+  if (!['completed', 'cancelled'].includes(task.status)) body.append(renderTaskLiveNoteContext(task));
 }
 
 function openTaskDetail(task, returnFocus) {
