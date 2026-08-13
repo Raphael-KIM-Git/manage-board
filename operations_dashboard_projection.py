@@ -6,6 +6,7 @@ raw task view remains the canonical source; this is an additive presentation mod
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -20,6 +21,97 @@ WORK_GROUPS = {
     "intake_clarifying", "planning", "in_progress", "verification",
     "pm_review", "done", "blocked", "unknown",
 }
+
+SYNC_FRESHNESS_SECONDS = 900
+WATCHDOG_FRESHNESS_SECONDS = 900
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def _exact_task_transition_match(value: Any, task_id: Any) -> bool:
+    if not isinstance(task_id, str) or not task_id.strip():
+        return False
+    expected = task_id.strip()
+    if isinstance(value, str):
+        parts = value.strip().split(":", 1)
+        return len(parts) == 2 and parts[0].strip() == expected and bool(parts[1].strip())
+    if not isinstance(value, dict) or not isinstance(value.get("task_id"), str):
+        return False
+    if value["task_id"].strip() != expected:
+        return False
+    if any(key in value and not isinstance(value[key], str) for key in ("status", "transition", "stage")):
+        return False
+    return any(isinstance(value.get(key), str) and value[key].strip() for key in ("status", "transition", "stage"))
+
+
+def _evidence_health(raw: Any, task: dict, *, kind: str, now: datetime | None = None,
+                     freshness_seconds: int | None = None) -> dict:
+    threshold = freshness_seconds if freshness_seconds is not None else (SYNC_FRESHNESS_SECONDS if kind == "sync" else WATCHDOG_FRESHNESS_SECONDS)
+    base = {"state": "never_observed", "observed_at": None, "freshness_seconds": threshold,
+            "source_limitation": "snapshot_missing", "task_transition_evidence": []}
+    if raw is None or raw == {}:
+        return base
+    if not isinstance(raw, dict) or raw.get("_malformed_snapshot") is True:
+        return {**base, "state": "unknown", "source_limitation": "malformed_snapshot"}
+    observed_at = raw.get("observed_at")
+    observed = _parse_timestamp(observed_at)
+    if observed is None:
+        return {**base, "state": "unknown", "observed_at": observed_at, "source_limitation": "observed_at_missing_or_invalid"}
+    now = now or datetime.now(timezone.utc)
+    now = (now if now.tzinfo else now.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+    age = max(0, int((now - observed).total_seconds()))
+    task_updated = _parse_timestamp(task.get("updated_at"))
+    older_than_task = bool(task_updated and observed < task_updated)
+    stale = age > threshold or older_than_task
+    evidence_keys = ("task_transition_evidence", "transition_evidence", "status_updates")
+    values = next((raw[key] for key in evidence_keys if key in raw), [])
+    malformed_evidence = (kind == "sync" and any(key in raw and not isinstance(raw[key], list) for key in evidence_keys))
+    malformed_evidence = malformed_evidence or (kind == "watchdog" and "active_tasks" in raw and not isinstance(raw["active_tasks"], list))
+    if malformed_evidence:
+        result = {"state": "unknown", "observed_at": observed_at, "freshness_seconds": threshold,
+                  "age_seconds": age, "source_limitation": "malformed_evidence",
+                  "task_transition_evidence": []}
+        if kind == "sync":
+            result["last_result"] = raw.get("last_result")
+            result["pull_exit"] = raw.get("pull_exit")
+        if kind == "watchdog":
+            result["active_task"] = None
+        return result
+    if kind == "sync":
+        state = "success" if raw.get("last_result") == "success" else "error" if raw.get("last_result") == "error" or raw.get("pull_exit") not in (None, 0) else "unknown"
+    else:
+        state = "success"
+    if stale:
+        state = "stale"
+    limitation = "snapshot_older_than_task_raw" if older_than_task else ("freshness_threshold_exceeded" if age > threshold else None)
+    if isinstance(values, (str, dict)):
+        values = [values]
+    result = {"state": state, "observed_at": observed_at, "freshness_seconds": threshold,
+              "age_seconds": age, "source_limitation": limitation,
+              "task_transition_evidence": [deepcopy(v) for v in values if kind == "sync" and _exact_task_transition_match(v, task.get("task_id"))]}
+    if kind == "sync":
+        result["last_result"] = raw.get("last_result")
+        result["pull_exit"] = raw.get("pull_exit")
+    if kind == "watchdog":
+        result["active_task"] = next((deepcopy(item) for item in raw.get("active_tasks", []) if isinstance(item, dict) and item.get("task_id") == task.get("task_id")), None)
+        if not result["active_task"]:
+            result["source_limitation"] = result["source_limitation"] or "task_not_in_snapshot"
+    return result
+
+
+def project_operations_evidence(task: dict, sync: Any = None, watchdog: Any = None, *, now: datetime | None = None,
+                                sync_freshness_seconds: int | None = None, watchdog_freshness_seconds: int | None = None) -> dict:
+    return {"schema_version": 1,
+            "sync": _evidence_health(sync, task, kind="sync", now=now, freshness_seconds=sync_freshness_seconds),
+            "watchdog": _evidence_health(watchdog, task, kind="watchdog", now=now, freshness_seconds=watchdog_freshness_seconds)}
 
 
 def classify_raw(mapping: dict, key: str, allowed: set[str] | None = None) -> dict:
@@ -129,37 +221,46 @@ def _safe_result_metadata(task: dict) -> list[dict]:
     return [item for item in values if isinstance(item, dict) and isinstance(item.get("metadata"), dict)]
 
 
-def _stage_from_name(name: str, task_id: str) -> str | None:
-    lowered = name.lower()
-    for marker, stage in (("-writing", "writing"), ("-verify", "verification"),
-                          ("-verification", "verification"), ("-final", "final_write")):
-        if marker in lowered:
-            return stage
-    return "research" if lowered.startswith(task_id.lower()) else None
-
-
 def _result_progress(task: dict) -> dict:
     stages = task.get("stages") or []
+    task_id = str(task.get("task_id") or "")
     expected_agents = {stage.get("id"): set(stage.get("agents") or []) for stage in stages if stage.get("id")}
     files = {item.get("name"): item for item in task.get("result_files") or [] if isinstance(item, dict)}
+    stage_ids: dict[str, str] = {}
+    historical_ids: dict[str, set[str]] = {}
+    for stage in stages:
+        stage_id = stage.get("id")
+        if not stage_id:
+            continue
+        default_id = task_id if stage_id == "research" else f"{task_id}-{stage_id if stage_id != 'verification' else 'verify'}"
+        stage_ids[stage_id] = str(stage.get("derived_task_id") or default_id)
+        historical_ids[stage_id] = {default_id}
     bundles: dict[str, dict] = {}
     ambiguous = []
     scoped_unknown: dict[str, set[str]] = {}
     for sidecar in _safe_result_metadata(task):
         metadata = sidecar["metadata"]
-        if metadata.get("task_id") != task.get("task_id"):
-            ambiguous.append({"name": sidecar.get("name"), "reason": "task_id mismatch or missing"})
-            continue
+        derived_id = metadata.get("task_id")
+        stage_value = metadata.get("stage_id") or metadata.get("stage")
+        stage = str(stage_value) if stage_value else None
+        if not stage:
+            stage = next((sid for sid, ids in stage_ids.items() if derived_id in ids or derived_id in historical_ids[sid]), None)
         worker = metadata.get("worker") or metadata.get("worker_name")
-        report = metadata.get("report_file")
-        stage = metadata.get("stage_id") or metadata.get("stage") or _stage_from_name(str(report or sidecar.get("name", "")), str(task.get("task_id", "")))
-        if not worker or not report or report not in files or stage not in expected_agents or worker not in expected_agents[stage]:
+        report_value = metadata.get("report_file")
+        report = str(report_value) if report_value else None
+        stage_key = stage or ""
+        active_id = stage_ids.get(stage_key)
+        legacy_parent_result = bool(stage and not next((s.get("derived_task_id") for s in stages if s.get("id") == stage), None)
+                                   and stage != "research" and derived_id == task_id)
+        is_active = bool(stage and (derived_id == active_id or legacy_parent_result))
+        is_history = bool(stage and derived_id in historical_ids.get(stage_key, set()) and not is_active)
+        if not worker or not report or report not in files or stage_key not in expected_agents or worker not in expected_agents[stage_key] or not (is_active or is_history):
             ambiguous.append({"name": sidecar.get("name"), "reason": "worker/stage/report_file unlinked", "stage": stage, "worker": worker})
             if isinstance(stage, str) and stage in expected_agents and worker in expected_agents[stage]:
                 scoped_unknown.setdefault(stage, set()).add(worker)
             continue
-        key = f"{stage}::{worker}"
-        bundle = bundles.setdefault(key, {"stage": stage, "worker": worker, "files": [], "status": None, "metadata": metadata})
+        key = f"{stage}::{worker}" if is_active else f"history::{stage}::{worker}::{derived_id}"
+        bundle = bundles.setdefault(key, {"stage": stage, "worker": worker, "derived_task_id": derived_id, "files": [], "status": None, "metadata": metadata, "history": is_history})
         bundle["files"].extend([sidecar.get("name"), report])
         status = metadata.get("status")
         if status in {"failed", "blocked"}:
@@ -178,13 +279,16 @@ def _result_progress(task: dict) -> dict:
             else:
                 dispatch = (task.get("dispatches") or {}).get(worker)
                 states[worker] = "dispatch_confirmed" if dispatch in {"dispatched", "dispatch_confirmed"} else "not_dispatched"
-        stage_bundles = [bundle for bundle in bundles.values() if bundle["stage"] == stage]
+        stage_bundles = [bundle for bundle in bundles.values() if bundle["stage"] == stage and not bundle.get("history")]
+        task_stage = next((item for item in stages if item.get("id") == stage), {})
         received = sum(bundle["status"] == "result_received" for bundle in stage_bundles)
         failed = any(bundle["status"] == "failed_or_blocked" for bundle in stage_bundles)
         if failed:
             maturity = "ambiguous"
         elif received == 0:
             maturity = "none"
+        elif task_stage.get("completion_policy") == "any" and received >= 1:
+            maturity = "reviewable"
         elif received < len(workers):
             maturity = "partial_received"
         else:
@@ -302,6 +406,7 @@ def project_task(task_view: dict) -> dict:
     final = project_final_review(task)
     artifacts = project_artifacts(task, task.get("result_files") or [], task.get("verification_files") or [])
     progress = project_progress(task)
+    operations_evidence = task.get("operations_evidence") or project_operations_evidence(task)
     hold = _active_hold(task)
     quality = [pipeline["quality"]] if pipeline.get("quality") else []
     status_quality = classify_raw(task, "status", {"queued", "planned", "dispatched", "partially_dispatched", "results_received", "waiting_verification", "needs_pm_review", "completed", "cancelled", "dispatch_blocked", "dispatch_failed", "in_progress"})
@@ -353,6 +458,7 @@ def project_task(task_view: dict) -> dict:
         "task_card": {"title": task.get("title", ""), "objective": task.get("objective", ""), "status": task.get("status"), "work_group": group["value"], "updated_at": task.get("updated_at")},
         "artifact_summary": artifacts["artifact"],
         "verification_summary": verification_summary,
+        "operations_evidence": operations_evidence,
         "progress": progress,
         "authority_summary": {"effective_final_approved": effective_final, "label": "현재 raw 근거", "history": "history_unavailable"},
         "audit_rows": audit_rows,

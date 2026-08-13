@@ -5,6 +5,7 @@ from operations_dashboard_projection import (
     build_dashboard_summary,
     classify_raw,
     project_progress,
+    project_operations_evidence,
     project_task,
 )
 
@@ -27,6 +28,62 @@ class DashboardProjectionTests(unittest.TestCase):
         }
         task.update(overrides)
         return task
+
+    def test_operations_evidence_is_observational_and_stale_safe(self):
+        task = self.task(task_id="T-SYNC", updated_at="2026-07-29T20:00:00+00:00", status="completed")
+        sync = {"observed_at": "2026-07-29T20:01:00+00:00", "last_result": "success", "status_updates": ["T-SYNC:completed", "T-OTHER:failed"]}
+        watchdog = {"observed_at": "2026-07-29T19:00:00+00:00", "active_tasks": [{"task_id": "T-SYNC", "status": "in_progress"}]}
+        evidence = project_operations_evidence(task, sync, watchdog, now=__import__("datetime").datetime.fromisoformat("2026-07-29T20:02:00+00:00"), sync_freshness_seconds=900, watchdog_freshness_seconds=900)
+        self.assertEqual(evidence["sync"]["state"], "success")
+        self.assertEqual(evidence["sync"]["task_transition_evidence"], ["T-SYNC:completed"])
+        self.assertEqual(evidence["watchdog"]["state"], "stale")
+        self.assertEqual(evidence["watchdog"]["source_limitation"], "snapshot_older_than_task_raw")
+        self.assertEqual(task["status"], "completed")
+
+    def test_operations_evidence_missing_and_malformed_are_safe(self):
+        task = self.task(task_id="T-SAFE")
+        evidence = project_operations_evidence(task, "not-json", {})
+        self.assertEqual(evidence["sync"]["state"], "unknown")
+        self.assertEqual(evidence["watchdog"]["state"], "never_observed")
+        malformed = project_operations_evidence(task, {"_malformed_snapshot": True}, None)
+        self.assertEqual(malformed["sync"]["state"], "unknown")
+        self.assertEqual(malformed["sync"]["source_limitation"], "malformed_snapshot")
+
+    def test_operations_evidence_requires_exact_task_id_correlation(self):
+        task = self.task(task_id="T-1")
+        sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success", "status_updates": ["T-10:completed", "T-1:completed", {"task_id": "T-10", "status": "completed"}, {"task_id": "T-1", "status": "completed"}]}
+        original = copy.deepcopy(sync)
+        evidence = project_operations_evidence(task, sync, now=__import__("datetime").datetime.fromisoformat("2026-07-21T10:02:00+00:00"))
+        self.assertEqual(evidence["sync"]["task_transition_evidence"], ["T-1:completed", {"task_id": "T-1", "status": "completed"}])
+        self.assertEqual(sync, original)
+
+    def test_operations_evidence_rejects_ambiguous_transition_shapes(self):
+        task = self.task(task_id="T-1")
+        sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success", "status_updates": ["T-1", {"task_id": "T-1"}, {"task_id": 1, "status": "completed"}, {"task_id": "T-1", "status": None}]}
+        evidence = project_operations_evidence(task, sync, now=__import__("datetime").datetime.fromisoformat("2026-07-21T10:02:00+00:00"))
+        self.assertEqual(evidence["sync"]["task_transition_evidence"], [])
+
+    def test_scalar_transition_evidence_is_unknown_and_non_positive(self):
+        task = self.task(task_id="T-1", status="in_progress")
+        sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success", "status_updates": 42}
+        original = copy.deepcopy(sync)
+        evidence = project_operations_evidence(task, sync, now=__import__("datetime").datetime.fromisoformat("2026-07-21T10:02:00+00:00"))
+        self.assertEqual(evidence["sync"]["state"], "unknown")
+        self.assertEqual(evidence["sync"]["source_limitation"], "malformed_evidence")
+        self.assertEqual(evidence["sync"]["task_transition_evidence"], [])
+        self.assertEqual(task["status"], "in_progress")
+        self.assertEqual(sync, original)
+
+    def test_non_list_watchdog_active_tasks_is_unknown_and_non_positive(self):
+        task = self.task(task_id="T-1", status="in_progress")
+        watchdog = {"observed_at": "2026-07-21T10:01:00+00:00", "active_tasks": None}
+        original = copy.deepcopy(watchdog)
+        evidence = project_operations_evidence(task, None, watchdog, now=__import__("datetime").datetime.fromisoformat("2026-07-21T10:02:00+00:00"))
+        self.assertEqual(evidence["watchdog"]["state"], "unknown")
+        self.assertEqual(evidence["watchdog"]["source_limitation"], "malformed_evidence")
+        self.assertIsNone(evidence["watchdog"]["active_task"])
+        self.assertEqual(task["status"], "in_progress")
+        self.assertEqual(watchdog, original)
 
     def progress_task(self, **overrides):
         task = {
@@ -125,6 +182,80 @@ class DashboardProjectionTests(unittest.TestCase):
         self.assertEqual(progress["agent_states"]["writing"]["writer-co"], "dispatch_confirmed")
         self.assertEqual(progress["next_pm_action"]["label"], "작성 결과 도착 확인")
         self.assertEqual(projection["verification_summary"]["state"], "not_run")
+
+    def test_derived_attempts_project_to_parent_stage_without_filename_guessing(self):
+        task = {
+            "task_id": "T-20260729-001", "status": "completed",
+            "stages": [
+                {"id": "research", "status": "completed", "agents": ["researcher-co"]},
+                {"id": "writing", "status": "completed", "agents": ["writer-co"],
+                 "derived_task_id": "T-20260729-001-writing-r1"},
+                {"id": "verification", "status": "completed", "agents": ["verify-co"],
+                 "derived_task_id": "T-20260729-001-verify"},
+            ],
+            "result_files": [
+                {"name": "T-20260729-001-writing__writer-co.md"},
+                {"name": "T-20260729-001-writing-r1__writer-co.md"},
+                {"name": "T-20260729-001-verify__verify-co.md"},
+            ],
+            "result_metadata": [
+                {"name": "old.json", "metadata": {"task_id": "T-20260729-001-writing", "worker": "writer-co", "stage_id": "writing", "status": "completed", "report_file": "T-20260729-001-writing__writer-co.md"}},
+                {"name": "r1.json", "metadata": {"task_id": "T-20260729-001-writing-r1", "worker": "writer-co", "stage_id": "writing", "status": "completed", "report_file": "T-20260729-001-writing-r1__writer-co.md"}},
+                {"name": "verify.json", "metadata": {"task_id": "T-20260729-001-verify", "worker": "verify-co", "stage_id": "verification", "status": "completed", "report_file": "T-20260729-001-verify__verify-co.md"}},
+            ],
+            "verification_files": [],
+        }
+        progress = project_progress(task)
+        writing = progress["agent_states"]["writing"]
+        self.assertEqual(writing["writer-co"], "result_received")
+        self.assertEqual(writing["_bundles"][0]["derived_task_id"], "T-20260729-001-writing-r1")
+        self.assertEqual(progress["agent_states"]["verification"]["verify-co"], "result_received")
+        self.assertEqual(progress["agent_states"]["verification"]["_maturity"], "reviewable")
+        self.assertTrue(any(bundle.get("history") for bundle in progress["bundles"]))
+
+    def test_completion_policy_any_is_reviewable_after_one_active_result(self):
+        task = self.progress_task(
+            stages=[{"id": "writing", "status": "in_progress", "agents": ["a", "b"], "completion_policy": "any"}],
+            dispatches={"a": "dispatched", "b": "dispatched"},
+            result_files=[{"name": "T-PROGRESS-writing-a.md"}],
+            result_metadata=[self.result("a", report="T-PROGRESS-writing-a.md")],
+        )
+        progress = project_progress(task)
+        writing = progress["agent_states"]["writing"]
+        self.assertEqual(writing["_received"], 1)
+        self.assertEqual(writing["_expected"], 2)
+        self.assertEqual(writing["_maturity"], "reviewable")
+        self.assertEqual(writing["_raw_status"], "in_progress")
+
+    def test_completion_policy_all_stays_partial_until_all_active_results_arrive(self):
+        task = self.progress_task(
+            stages=[{"id": "writing", "status": "in_progress", "agents": ["a", "b"], "completion_policy": "all"}],
+            dispatches={"a": "dispatched", "b": "dispatched"},
+            result_files=[{"name": "T-PROGRESS-writing-a.md"}],
+            result_metadata=[self.result("a", report="T-PROGRESS-writing-a.md")],
+        )
+        progress = project_progress(task)
+        self.assertEqual(progress["agent_states"]["writing"]["_maturity"], "partial_received")
+        self.assertEqual(progress["agent_states"]["writing"]["_raw_status"], "in_progress")
+
+    def test_unrecognized_derived_retry_fails_closed_without_mutating_raw_task(self):
+        task = self.progress_task(
+            stages=[{"id": "writing", "status": "in_progress", "agents": ["writer-co"],
+                     "completion_policy": "any", "derived_task_id": "T-PROGRESS-writing-r2"}],
+            result_files=[{"name": "unknown-retry.md"}],
+            result_metadata=[{"name": "unknown-retry.json", "metadata": {
+                "task_id": "T-PROGRESS-writing-r999", "worker": "writer-co", "stage_id": "writing",
+                "status": "completed", "report_file": "unknown-retry.md",
+            }}],
+        )
+        before = copy.deepcopy(task)
+        progress = project_progress(task)
+        state = progress["agent_states"]["writing"]
+        self.assertEqual(state["writer-co"], "unknown")
+        self.assertEqual(state["_maturity"], "ambiguous")
+        self.assertEqual(progress["next_pm_action"]["kind"], "unknown")
+        self.assertEqual(state["_raw_status"], "in_progress")
+        self.assertEqual(task, before)
 
     def test_missing_null_unknown_are_distinct(self):
         self.assertEqual(classify_raw({}, "pipeline_shape")["state"], "missing")
