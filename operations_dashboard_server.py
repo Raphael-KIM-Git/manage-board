@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,7 +15,129 @@ from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 
 from operations_dashboard_projection import build_dashboard_summary, project_operations_evidence, project_task
 
-BASE_DIR = Path('/home/raphael/myproject')
+CANONICAL_ROOT = Path('/home/raphael/myproject')
+CANONICAL_STATIC_ROOT = CANONICAL_ROOT / 'operations_dashboard'
+
+
+@dataclass(frozen=True)
+class RuntimePaths:
+    runtime_root: Path
+    static_root: Path
+
+    @property
+    def operations_dir(self) -> Path:
+        return self.runtime_root / 'operations'
+
+    @property
+    def operational_dirs(self) -> tuple[Path, ...]:
+        return tuple(self.operations_dir / name for name in (
+            'briefs', 'results', 'verifications', 'digests', 'dispatches',
+            'inputs', 'interviews', 'seeds', 'config',
+        ))
+
+    @property
+    def config_dir(self) -> Path:
+        return self.operations_dir / 'config'
+
+    @property
+    def workers_config_path(self) -> Path:
+        return self.config_dir / 'workers.json'
+
+
+def _absolute_path(value: str | Path, label: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError(f'{label} must be an absolute path')
+    return path.absolute()
+
+
+def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
+    env = os.environ if env is None else env
+    if injected is not None:
+        if isinstance(injected, RuntimePaths):
+            runtime_root, static_root = injected.runtime_root, injected.static_root
+        else:
+            runtime_root = injected.get('runtime_root') or injected.get('runtime')
+            static_root = injected.get('static_root') or injected.get('static')
+        if runtime_root is None or static_root is None:
+            raise ValueError('injected runtime and static roots are required')
+    else:
+        runtime_value = env.get('OPS_DASHBOARD_RUNTIME_ROOT')
+        static_value = env.get('OPS_DASHBOARD_STATIC_ROOT')
+        if bool(runtime_value) != bool(static_value):
+            raise ValueError('OPS_DASHBOARD_RUNTIME_ROOT and OPS_DASHBOARD_STATIC_ROOT must be supplied together')
+        runtime_root = runtime_value or CANONICAL_ROOT
+        static_root = static_value or CANONICAL_STATIC_ROOT
+
+    runtime = _absolute_path(runtime_root, 'runtime root')
+    static = _absolute_path(static_root, 'static root')
+    resolved_runtime = runtime.resolve(strict=False)
+    resolved_static = static.resolve(strict=False)
+    if resolved_runtime == CANONICAL_ROOT.resolve():
+        if injected is not None or env.get('OPS_DASHBOARD_RUNTIME_ROOT'):
+            raise ValueError('runtime root must not be canonical root')
+    if not runtime.is_dir():
+        raise ValueError('runtime root must be an existing directory')
+    if not static.is_dir():
+        raise ValueError('static root must be an existing directory')
+    is_legacy_default = injected is None and not env.get('OPS_DASHBOARD_RUNTIME_ROOT')
+    if not is_legacy_default and (resolved_static == resolved_runtime or resolved_runtime in resolved_static.parents):
+        raise ValueError('static root must be outside runtime root')
+    required = ('index.html', 'app.js', 'styles.css', 'detail.html')
+    if any(not (static / name).is_file() for name in required):
+        raise ValueError('static root is missing a required asset')
+    return RuntimePaths(runtime, static)
+
+
+def _validate_operational_containment(paths: RuntimePaths) -> None:
+    runtime = paths.runtime_root.resolve(strict=False)
+    for target in (*paths.operational_dirs, paths.config_dir, paths.workers_config_path):
+        resolved = target.resolve(strict=False)
+        try:
+            resolved.relative_to(runtime)
+        except ValueError as exc:
+            raise ValueError(f'operational path escapes runtime root: {target}') from exc
+
+
+def configure_runtime(paths: RuntimePaths, *, _allow_legacy_default: bool = False) -> RuntimePaths:
+    global BASE_DIR, OPERATIONS_DIR, BRIEFS_DIR, RESULTS_DIR, VERIFICATIONS_DIR
+    global DIGESTS_DIR, DISPATCHES_DIR, INPUTS_DIR, INTERVIEWS_DIR, SEEDS_DIR
+    global CONFIG_DIR, WORKERS_CONFIG_PATH, UI_DIR
+    if _allow_legacy_default:
+        if paths != resolve_runtime_paths(env={}):
+            raise ValueError('legacy default configuration must be resolved explicitly')
+    else:
+        paths = resolve_runtime_paths(injected=paths)
+    _validate_operational_containment(paths)
+    BASE_DIR = paths.runtime_root
+    OPERATIONS_DIR = paths.operations_dir
+    (globals().update({
+        'BRIEFS_DIR': paths.operational_dirs[0], 'RESULTS_DIR': paths.operational_dirs[1],
+        'VERIFICATIONS_DIR': paths.operational_dirs[2], 'DIGESTS_DIR': paths.operational_dirs[3],
+        'DISPATCHES_DIR': paths.operational_dirs[4], 'INPUTS_DIR': paths.operational_dirs[5],
+        'INTERVIEWS_DIR': paths.operational_dirs[6], 'SEEDS_DIR': paths.operational_dirs[7],
+        'CONFIG_DIR': paths.config_dir, 'WORKERS_CONFIG_PATH': paths.workers_config_path,
+        'UI_DIR': paths.static_root,
+    }))
+    return paths
+
+
+def initialize_runtime(paths: RuntimePaths | None = None) -> RuntimePaths:
+    if paths is None:
+        env = os.environ
+        paths = resolve_runtime_paths(env=env)
+        using_legacy_default = not env.get('OPS_DASHBOARD_RUNTIME_ROOT') and not env.get('OPS_DASHBOARD_STATIC_ROOT')
+    else:
+        using_legacy_default = False
+    paths = configure_runtime(paths, _allow_legacy_default=using_legacy_default)
+    for directory in (*paths.operational_dirs, paths.config_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    if not paths.workers_config_path.exists():
+        paths.workers_config_path.write_text(json.dumps(DEFAULT_WORKERS, ensure_ascii=False, indent=2), encoding='utf-8')
+    return paths
+
+
+BASE_DIR = CANONICAL_ROOT
 OPERATIONS_DIR = BASE_DIR / 'operations'
 BRIEFS_DIR = OPERATIONS_DIR / 'briefs'
 RESULTS_DIR = OPERATIONS_DIR / 'results'
@@ -26,13 +149,10 @@ INTERVIEWS_DIR = OPERATIONS_DIR / 'interviews'
 SEEDS_DIR = OPERATIONS_DIR / 'seeds'
 CONFIG_DIR = OPERATIONS_DIR / 'config'
 WORKERS_CONFIG_PATH = CONFIG_DIR / 'workers.json'
-UI_DIR = BASE_DIR / 'operations_dashboard'
+UI_DIR = CANONICAL_STATIC_ROOT
 PROFILES_DIR = Path('/home/raphael/.hermes/profiles')
 HOST = os.environ.get('OPS_DASHBOARD_HOST', '127.0.0.1')
 PORT = int(os.environ.get('OPS_DASHBOARD_PORT', '8765'))
-
-for d in [BRIEFS_DIR, RESULTS_DIR, VERIFICATIONS_DIR, DIGESTS_DIR, DISPATCHES_DIR, INPUTS_DIR, INTERVIEWS_DIR, SEEDS_DIR, CONFIG_DIR, UI_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_WORKERS = {
     'Claude Code Worker': {
@@ -61,10 +181,6 @@ DEFAULT_WORKERS = {
         'notes': 'Local hub profile; not a remote dispatch target.',
     },
 }
-
-if not WORKERS_CONFIG_PATH.exists():
-    WORKERS_CONFIG_PATH.write_text(json.dumps(DEFAULT_WORKERS, ensure_ascii=False, indent=2), encoding='utf-8')
-
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec='seconds')
@@ -1532,6 +1648,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    initialize_runtime()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'Operations dashboard running on http://{HOST}:{PORT}')
     server.serve_forever()
