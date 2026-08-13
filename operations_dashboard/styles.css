@@ -1046,3 +1046,12 @@ a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .final-review.fr-partial .final-review-badge { color: #a6791e; }
 .final-review.fr-not_meets { background: rgba(200, 74, 74, 0.1); }
 .final-review.fr-not_meets .final-review-badge { color: #b0413c; }
+
+.operations-evidence-panel { margin: -6px 0 18px; padding: 14px 18px; }
+.operations-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.operations-evidence-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
+.operations-evidence-label { color: var(--muted); font-size: 12px; font-weight: 800; }
+.operations-evidence-meta, .operations-evidence-limit { color: var(--muted); font-size: 12px; }
+.evidence-error { background: var(--danger-soft); }
+.evidence-stale, .evidence-unknown, .evidence-never_observed { background: var(--warn-soft); }
+@media (max-width: 720px) { .operations-evidence-grid { grid-template-columns: 1fr; } }

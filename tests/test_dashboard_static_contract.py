@@ -121,6 +121,15 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertNotIn("modified_at", renderer)
         self.assertNotIn("mergeFlow(", renderer)
 
+    def test_operations_evidence_mount_renderers_and_invocation(self):
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="operationsEvidence"', self.source)
+        self.assertIn("function renderOperationsEvidence", js)
+        self.assertIn("function renderTaskOperationsEvidence", js)
+        self.assertIn("renderOperationsEvidence(overview.operations_evidence)", js)
+        for label in ("오래된 관찰", "확인 불가", "관찰 기록 없음"):
+            self.assertIn(label, js)
+
     def test_secondary_agent_context_is_collapsed_and_after_recent_audit(self):
         recent = self.source.index('id="recentAudit"')
         secondary = self.source.index('id="secondaryAgentContext"')

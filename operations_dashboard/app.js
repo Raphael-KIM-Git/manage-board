@@ -1051,6 +1051,7 @@ async function loadDashboard() {
   ]);
 
   dashboardState = { overview, tasks, results, verifications, digests };
+  renderOperationsEvidence(overview.operations_evidence);
   renderMissionControl(overview.dashboard_summary, tasks || []);
   renderDecisionQueue(tasks || []);
   renderReviewableArtifacts(tasks || []);
@@ -1529,6 +1530,29 @@ function renderArtifactReviewPanel(task, projection) {
   return panel;
 }
 
+function renderOperationsEvidence(evidence) {
+  const root = document.getElementById('operationsEvidence');
+  if (!root) return;
+  root.replaceChildren();
+  root.append(el('strong', '', '운영 관찰 근거'));
+  root.append(renderTaskOperationsEvidence(evidence));
+}
+
+function renderTaskOperationsEvidence(evidence) {
+  const grid = el('div', 'operations-evidence-grid');
+  [['sync', 'Sync'], ['watchdog', 'Watchdog']].forEach(([key, label]) => {
+    const item = evidence?.[key] || { state: 'unknown' };
+    const state = item.state || 'unknown';
+    const row = el('div', `operations-evidence-item evidence-${state}`);
+    row.append(el('span', 'operations-evidence-label', label));
+    row.append(el('strong', 'operations-evidence-state', ({ success: '성공', error: '오류', stale: '오래된 관찰', never_observed: '관찰 기록 없음', unknown: '확인 불가' }[state] || '확인 불가')));
+    row.append(el('span', 'operations-evidence-meta', item.observed_at ? `관찰 ${item.observed_at}` : '관찰 시각 없음'));
+    if (item.source_limitation) row.append(el('span', 'operations-evidence-limit', `한계 · ${item.source_limitation}`));
+    grid.append(row);
+  });
+  return grid;
+}
+
 function renderTaskDetail(task) {
   const body = document.getElementById('taskDetailBody');
   if (!body) return;
@@ -1538,6 +1562,7 @@ function renderTaskDetail(task) {
     return;
   }
   const projection = taskProjection(task);
+  body.append(detailSection('Sync / Watchdog evidence', 'task-detail-operations-evidence', renderTaskOperationsEvidence(task.operations_evidence || projection.operations_evidence || {})));
   const outcome = el('div', 'task-detail-copy');
   outcome.append(el('p', 'task-detail-lead', detailValue(task.objective, '업무 목표 확인 불가')));
   outcome.append(el('p', 'task-detail-meta', `${humanStatus(task.status)} · ${detailValue(task.updated_at || task.created_at, '시간 확인 불가')}`));

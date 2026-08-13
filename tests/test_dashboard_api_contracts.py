@@ -13,7 +13,7 @@ class DashboardAPIContractTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.original = {name: getattr(server, name) for name in (
-            "BRIEFS_DIR", "RESULTS_DIR", "VERIFICATIONS_DIR", "DIGESTS_DIR", "DISPATCHES_DIR", "INTERVIEWS_DIR", "SEEDS_DIR"
+            "OPERATIONS_DIR", "BRIEFS_DIR", "RESULTS_DIR", "VERIFICATIONS_DIR", "DIGESTS_DIR", "DISPATCHES_DIR", "INTERVIEWS_DIR", "SEEDS_DIR"
         )}
         for name in self.original:
             value = root / name.lower()
@@ -40,6 +40,22 @@ class DashboardAPIContractTests(unittest.TestCase):
         overview = server.build_overview()
         self.assertEqual(overview["dashboard_summary"]["schema_version"], 1)
         self.assertIn("status_counts", overview)
+        self.assertIn("operations_evidence", view)
+        self.assertIn("operations_evidence", overview)
+
+    def test_operations_evidence_contract(self):
+        self.assertEqual(server.project_operations_evidence(self.task, {}, None)["sync"]["state"], "never_observed")
+        self.assertEqual(server.project_operations_evidence(self.task, {"_malformed_snapshot": True}, None)["sync"]["state"], "unknown")
+
+    def test_invalid_utf8_observation_snapshot_fails_closed(self):
+        sync_dir = server.OPERATIONS_DIR / "sync"
+        sync_dir.mkdir()
+        snapshot = sync_dir / "latest.json"
+        snapshot.write_bytes(bytes([123, 255]))
+        self.assertEqual(server.read_observational_json_file(snapshot), {"_malformed_snapshot": True})
+        view = server.build_task_view(self.task)
+        self.assertEqual(view["operations_evidence"]["sync"]["state"], "unknown")
+        self.assertEqual(self.task["status"], "needs_pm_review")
 
     def test_gate_override_contract(self):
         result = server.set_gate_override("T-API-001", "writing", "revise")

@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 
-from operations_dashboard_projection import build_dashboard_summary, project_task
+from operations_dashboard_projection import build_dashboard_summary, project_operations_evidence, project_task
 
 BASE_DIR = Path('/home/raphael/myproject')
 OPERATIONS_DIR = BASE_DIR / 'operations'
@@ -128,6 +128,15 @@ def list_items(folder: Path) -> list[dict]:
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding='utf-8'))
+
+def read_observational_json_file(path: Path) -> dict:
+    try:
+        value = load_json(path)
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return {'_malformed_snapshot': True}
+    return value if isinstance(value, dict) else {'_malformed_snapshot': True}
 
 
 def save_json(path: Path, data: dict):
@@ -731,6 +740,8 @@ def build_task_view(task: dict) -> dict:
     digest_files = task_related_files(task_id, DIGESTS_DIR)
     interview_files = task_related_files(task_id, INTERVIEWS_DIR)
     seed_files = task_related_files(task_id, SEEDS_DIR)
+    sync_evidence = read_observational_json_file(OPERATIONS_DIR / 'sync' / 'latest.json')
+    watchdog_evidence = read_observational_json_file(OPERATIONS_DIR / 'watchdog' / 'latest.json')
     stages = task.get('stages') or ([] if task.get('pipeline_name') != 'research-write-verify-finalize' else default_pipeline_stages(task_id, task.get('deliverable', ''), task.get('reviewer', 'HermesVerifier')))
     pipeline = pipeline_summary(stages)
     view = {
@@ -763,6 +774,7 @@ def build_task_view(task: dict) -> dict:
         'seed': task.get('seed'),
         'interview_files': interview_files,
         'seed_files': seed_files,
+        'operations_evidence': project_operations_evidence(task, sync_evidence, watchdog_evidence),
         'latest_result': result_files[0]['name'] if result_files else None,
         'latest_verification': verification_files[0]['name'] if verification_files else None,
         'latest_digest': digest_files[0]['name'] if digest_files else None,
@@ -943,6 +955,8 @@ def build_overview() -> dict:
     status_counts = {}
     for task in tasks:
         status_counts[task['status']] = status_counts.get(task['status'], 0) + 1
+    sync_evidence = read_observational_json_file(OPERATIONS_DIR / 'sync' / 'latest.json')
+    watchdog_evidence = read_observational_json_file(OPERATIONS_DIR / 'watchdog' / 'latest.json')
     return {
         'hub_status': 'online',
         'task_count': len(tasks),
@@ -957,6 +971,7 @@ def build_overview() -> dict:
         'status_counts': status_counts,
         'workers': worker_status_map(),
         'agents': build_agent_summary(tasks),
+        'operations_evidence': {'schema_version': 1, 'sync': project_operations_evidence({}, sync_evidence, None)['sync'], 'watchdog': project_operations_evidence({}, None, watchdog_evidence)['watchdog']},
         'dashboard_summary': build_dashboard_summary(tasks),
     }
 
