@@ -73,14 +73,23 @@ def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
     static = _absolute_path(static_root, 'static root')
     resolved_runtime = runtime.resolve(strict=False)
     resolved_static = static.resolve(strict=False)
-    if resolved_runtime == CANONICAL_ROOT.resolve():
-        if injected is not None or env.get('OPS_DASHBOARD_RUNTIME_ROOT'):
-            raise ValueError('runtime root must not be canonical root')
+    is_legacy_default = injected is None and not env.get('OPS_DASHBOARD_RUNTIME_ROOT')
+    is_explicit_runtime = injected is not None or bool(env.get('OPS_DASHBOARD_RUNTIME_ROOT'))
+    allow_canonical_runtime = (
+        env.get('OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME') == '1'
+        and bool(env.get('OPS_DASHBOARD_RUNTIME_ROOT'))
+        and bool(env.get('OPS_DASHBOARD_STATIC_ROOT'))
+        and _absolute_path(env['OPS_DASHBOARD_RUNTIME_ROOT'], 'runtime root').resolve(strict=False) == resolved_runtime
+        and _absolute_path(env['OPS_DASHBOARD_STATIC_ROOT'], 'static root').resolve(strict=False) == resolved_static
+    )
+    if resolved_runtime == CANONICAL_ROOT.resolve() and not (
+        is_legacy_default or (is_explicit_runtime and allow_canonical_runtime)
+    ):
+        raise ValueError('runtime root must not be canonical root')
     if not runtime.is_dir():
         raise ValueError('runtime root must be an existing directory')
     if not static.is_dir():
         raise ValueError('static root must be an existing directory')
-    is_legacy_default = injected is None and not env.get('OPS_DASHBOARD_RUNTIME_ROOT')
     if not is_legacy_default and (resolved_static == resolved_runtime or resolved_runtime in resolved_static.parents):
         raise ValueError('static root must be outside runtime root')
     required = ('index.html', 'app.js', 'styles.css', 'detail.html')

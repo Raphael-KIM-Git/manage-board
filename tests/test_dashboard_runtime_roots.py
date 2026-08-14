@@ -90,6 +90,43 @@ class RuntimeRootsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.resolve_runtime_paths(injected={'runtime_root': link, 'static_root': self.static})
 
+    def test_canonical_runtime_requires_exact_opt_in_flag(self):
+        base = {
+            'OPS_DASHBOARD_RUNTIME_ROOT': str(ROOT),
+            'OPS_DASHBOARD_STATIC_ROOT': str(self.static),
+        }
+        for flag in (None, '', 'true', 'TRUE', 'yes', '0', '01', ' 1'):
+            env = {**base}
+            if flag is not None:
+                env['OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME'] = flag
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                server.resolve_runtime_paths(env=env)
+
+        env = {
+            **base,
+            'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+        }
+        paths = server.resolve_runtime_paths(env=env)
+        self.assertEqual(paths.runtime_root, ROOT)
+        self.assertEqual(paths.static_root, self.static)
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(server.configure_runtime(paths), paths)
+
+    def test_symlink_canonical_runtime_accepts_exact_opt_in_flag(self):
+        link = Path(self.temp.name) / 'canonical-link'
+        link.symlink_to(ROOT, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            server.resolve_runtime_paths(env={
+                'OPS_DASHBOARD_RUNTIME_ROOT': str(link),
+                'OPS_DASHBOARD_STATIC_ROOT': str(self.static),
+            })
+        paths = server.resolve_runtime_paths(env={
+            'OPS_DASHBOARD_RUNTIME_ROOT': str(link),
+            'OPS_DASHBOARD_STATIC_ROOT': str(self.static),
+            'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+        })
+        self.assertEqual(paths.runtime_root, link)
+
     def test_static_inside_runtime_and_missing_assets_rejected(self):
         inside = self.root / 'static'
         inside.mkdir()
