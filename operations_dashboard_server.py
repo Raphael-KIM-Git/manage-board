@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 
 from operations_dashboard_projection import build_dashboard_summary, project_operations_evidence, project_task
+from operations_dashboard_console import project_console_snapshot
 
 CANONICAL_ROOT = Path('/home/raphael/myproject')
 CANONICAL_STATIC_ROOT = CANONICAL_ROOT / 'operations_dashboard'
@@ -972,6 +973,12 @@ def build_task_view(task: dict) -> dict:
     return view
 
 
+def build_dashboard_console() -> dict:
+    """Build all v2 panes from one task load; pane failures stay isolated."""
+    tasks = [build_task_view(t) for t in load_tasks()]
+    return project_console_snapshot(tasks, availability=worker_status_map())
+
+
 def build_agent_summary(tasks: list[dict]) -> list[dict]:
     worker_statuses = worker_status_map()
     profile_agents = profile_agent_map()
@@ -1535,6 +1542,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == '/api/overview':
             return self._send_json(build_overview())
+        if path == '/api/dashboard-console':
+            return self._send_json(build_dashboard_console())
         if path == '/api/briefs':
             return self._send_json(list_items(BRIEFS_DIR))
         if path == '/api/results':
