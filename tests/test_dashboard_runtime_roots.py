@@ -168,6 +168,34 @@ class RuntimeRootsTests(unittest.TestCase):
                 'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
             })
 
+    def test_unrelated_repository_worktree_nested_under_canonical_rejected(self):
+        canonical = Path(self.temp.name) / 'canonical'
+        foreign = Path(self.temp.name) / 'foreign'
+        nested_foreign = canonical / '.worktrees' / 'foreign'
+        for repository in (canonical, foreign):
+            repository.mkdir()
+            subprocess.run(['git', 'init', str(repository)], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(repository), 'config', 'user.email', 'test@example.com'], check=True)
+            subprocess.run(['git', '-C', str(repository), 'config', 'user.name', 'Test'], check=True)
+        foreign_assets = foreign / 'operations_dashboard'
+        foreign_assets.mkdir()
+        for name in ('index.html', 'app.js', 'styles.css', 'detail.html'):
+            (foreign_assets / name).write_bytes((STATIC / name).read_bytes())
+        subprocess.run(['git', '-C', str(foreign), 'add', 'operations_dashboard'], check=True)
+        subprocess.run(['git', '-C', str(foreign), 'commit', '-m', 'init'], check=True, capture_output=True)
+        nested_foreign.parent.mkdir(parents=True)
+        subprocess.run(
+            ['git', '-C', str(foreign), 'worktree', 'add', str(nested_foreign)],
+            check=True, capture_output=True,
+        )
+        with mock.patch.object(server, 'CANONICAL_ROOT', canonical):
+            with self.assertRaises(ValueError):
+                server.resolve_runtime_paths(env={
+                    'OPS_DASHBOARD_RUNTIME_ROOT': str(canonical),
+                    'OPS_DASHBOARD_STATIC_ROOT': str(nested_foreign / 'operations_dashboard'),
+                    'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+                })
+
     def test_nested_static_symlink_escape_rejected(self):
         canonical = Path(self.temp.name) / 'canonical'
         canonical.mkdir()

@@ -66,13 +66,26 @@ def _is_clean_source_worktree(static_root: Path, canonical_root: Path) -> bool:
             ['git', '-C', str(worktree_root), 'rev-parse', '--show-toplevel'],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
+        worktree_common_dir = subprocess.run(
+            ['git', '-C', str(worktree_root), 'rev-parse', '--git-common-dir'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        canonical_common_dir = subprocess.run(
+            ['git', '-C', str(canonical_root), 'rev-parse', '--git-common-dir'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
         status = subprocess.run(
             ['git', '-C', str(worktree_root), 'status', '--porcelain', '--untracked-files=all'],
             check=True, capture_output=True, text=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return False
-    return Path(top_level).resolve(strict=False) == worktree_root and not status.strip()
+    return (
+        Path(top_level).resolve(strict=False) == worktree_root
+        and (worktree_root / worktree_common_dir).resolve(strict=False)
+        == (canonical_root / canonical_common_dir).resolve(strict=False)
+        and not status.strip()
+    )
 
 
 def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
