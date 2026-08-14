@@ -127,6 +127,66 @@ class RuntimeRootsTests(unittest.TestCase):
         })
         self.assertEqual(paths.runtime_root, link)
 
+    def test_canonical_runtime_accepts_clean_worktree_static_root(self):
+        canonical = Path(self.temp.name) / 'canonical'
+        canonical.mkdir()
+        source = canonical / '.worktrees' / 'source'
+        source.parent.mkdir(parents=True)
+        subprocess.run(['git', 'init', str(canonical)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(canonical), 'config', 'user.email', 'test@example.com'], check=True)
+        subprocess.run(['git', '-C', str(canonical), 'config', 'user.name', 'Test'], check=True)
+        (canonical / 'README').write_text('source')
+        source_assets = canonical / 'operations_dashboard'
+        source_assets.mkdir()
+        for name in ('index.html', 'app.js', 'styles.css', 'detail.html'):
+            (source_assets / name).write_bytes((STATIC / name).read_bytes())
+        subprocess.run(['git', '-C', str(canonical), 'add', 'README', 'operations_dashboard'], check=True)
+        subprocess.run(['git', '-C', str(canonical), 'commit', '-m', 'init'], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(canonical), 'worktree', 'add', str(source)], check=True, capture_output=True)
+        static = source / 'operations_dashboard'
+        with mock.patch.object(server, 'CANONICAL_ROOT', canonical):
+            paths = server.resolve_runtime_paths(env={
+                'OPS_DASHBOARD_RUNTIME_ROOT': str(canonical),
+                'OPS_DASHBOARD_STATIC_ROOT': str(static),
+                'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+            })
+        self.assertEqual(paths.static_root, static)
+
+    def test_arbitrary_nested_and_operational_static_roots_rejected(self):
+        nested = ROOT / '.worktrees' / 'not-a-worktree' / 'operations_dashboard'
+        operational = ROOT / '.worktrees' / 't_de1e1a6b' / 'operations'
+        with self.assertRaises(ValueError):
+            server.resolve_runtime_paths(env={
+                'OPS_DASHBOARD_RUNTIME_ROOT': str(ROOT),
+                'OPS_DASHBOARD_STATIC_ROOT': str(nested),
+                'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+            })
+        with self.assertRaises(ValueError):
+            server.resolve_runtime_paths(env={
+                'OPS_DASHBOARD_RUNTIME_ROOT': str(ROOT),
+                'OPS_DASHBOARD_STATIC_ROOT': str(operational),
+                'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+            })
+
+    def test_nested_static_symlink_escape_rejected(self):
+        canonical = Path(self.temp.name) / 'canonical'
+        canonical.mkdir()
+        worktree = canonical / '.worktrees' / 'source'
+        worktree.mkdir(parents=True)
+        escaped = Path(self.temp.name) / 'escaped'
+        escaped.mkdir()
+        for name in ('index.html', 'app.js', 'styles.css', 'detail.html'):
+            (escaped / name).write_bytes(b'asset')
+        static_link = worktree / 'operations_dashboard'
+        static_link.symlink_to(escaped, target_is_directory=True)
+        with mock.patch.object(server, 'CANONICAL_ROOT', canonical):
+            with self.assertRaises(ValueError):
+                server.resolve_runtime_paths(env={
+                    'OPS_DASHBOARD_RUNTIME_ROOT': str(canonical),
+                    'OPS_DASHBOARD_STATIC_ROOT': str(static_link),
+                    'OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME': '1',
+                })
+
     def test_static_inside_runtime_and_missing_assets_rejected(self):
         inside = self.root / 'static'
         inside.mkdir()

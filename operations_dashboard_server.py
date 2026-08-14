@@ -51,6 +51,30 @@ def _absolute_path(value: str | Path, label: str) -> Path:
     return path.absolute()
 
 
+def _is_clean_source_worktree(static_root: Path, canonical_root: Path) -> bool:
+    """Allow only assets directly from a registered, clean source worktree."""
+    worktree_root = static_root.parent
+    worktrees_root = canonical_root / '.worktrees'
+    try:
+        relative = worktree_root.relative_to(worktrees_root)
+    except ValueError:
+        return False
+    if len(relative.parts) != 1 or not (worktree_root / '.git').is_file():
+        return False
+    try:
+        top_level = subprocess.run(
+            ['git', '-C', str(worktree_root), 'rev-parse', '--show-toplevel'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ['git', '-C', str(worktree_root), 'status', '--porcelain', '--untracked-files=all'],
+            check=True, capture_output=True, text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return Path(top_level).resolve(strict=False) == worktree_root and not status.strip()
+
+
 def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
     env = os.environ if env is None else env
     if injected is not None:
@@ -90,7 +114,27 @@ def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
         raise ValueError('runtime root must be an existing directory')
     if not static.is_dir():
         raise ValueError('static root must be an existing directory')
-    if not is_legacy_default and (resolved_static == resolved_runtime or resolved_runtime in resolved_static.parents):
+    is_canonical_runtime = resolved_runtime == CANONICAL_ROOT.resolve()
+    if is_canonical_runtime and not is_legacy_default:
+        try:
+            static.relative_to(CANONICAL_ROOT)
+        except ValueError:
+            pass
+        else:
+            try:
+                resolved_static.relative_to(CANONICAL_ROOT.resolve())
+            except ValueError as exc:
+                raise ValueError('static root escapes canonical root') from exc
+    is_allowed_nested_worktree_static = (
+        is_canonical_runtime
+        and allow_canonical_runtime
+        and static == resolved_static
+        and resolved_static.parent.parent == (CANONICAL_ROOT / '.worktrees').resolve()
+        and resolved_static.name == 'operations_dashboard'
+        and _is_clean_source_worktree(resolved_static, CANONICAL_ROOT.resolve())
+    )
+    static_inside_runtime = resolved_static == resolved_runtime or resolved_runtime in resolved_static.parents
+    if not is_legacy_default and static_inside_runtime and not is_allowed_nested_worktree_static:
         raise ValueError('static root must be outside runtime root')
     required = ('index.html', 'app.js', 'styles.css', 'detail.html')
     if any(not (static / name).is_file() for name in required):
