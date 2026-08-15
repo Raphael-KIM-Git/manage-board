@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import shlex
@@ -23,7 +24,7 @@ from operations_followup_requests import (
     submit_request as submit_followup_request,
 )
 
-BASE_DIR = Path('/home/raphael/myproject')
+BASE_DIR = Path(__file__).resolve().parent
 OPERATIONS_DIR = BASE_DIR / 'operations'
 BRIEFS_DIR = OPERATIONS_DIR / 'briefs'
 RESULTS_DIR = OPERATIONS_DIR / 'results'
@@ -1410,13 +1411,29 @@ class Handler(BaseHTTPRequestHandler):
         write_all(self.wfile, body)
 
     def _followup_origin_allowed(self) -> bool:
-        """Write routes require an explicit same-origin browser request."""
+        """Follow-up writes are local-only and require the exact listener origin."""
+        address = getattr(self.server, 'server_address', (HOST, PORT))
+        listener_host = str(address[0])
+        try:
+            if not ipaddress.ip_address(listener_host).is_loopback:
+                return False
+        except ValueError:
+            return False
+        listener_port = int(address[1])
+        canonical_host = f'[{listener_host}]:{listener_port}' if ':' in listener_host else f'{listener_host}:{listener_port}'
         origin = (self.headers.get('Origin') or '').strip()
         host = (self.headers.get('Host') or '').strip()
-        if not origin or not host:
+        if host != canonical_host or not origin:
             return False
         parsed = urlparse(origin)
-        return parsed.scheme in {'http', 'https'} and parsed.netloc == host
+        return parsed.scheme == 'http' and parsed.netloc == canonical_host and not parsed.path and not parsed.params and not parsed.query and not parsed.fragment
+
+    def _followup_listener_allowed(self) -> bool:
+        address = getattr(self.server, 'server_address', (HOST, PORT))
+        try:
+            return ipaddress.ip_address(str(address[0])).is_loopback
+        except (ValueError, IndexError):
+            return False
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1512,8 +1529,37 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        length = int(self.headers.get('Content-Length', '0'))
-        raw = self.rfile.read(length)
+        followup_match = re.fullmatch(r'/api/tasks/([^/]+)/follow-up-requests', parsed.path)
+        if followup_match:
+            declared_length = self.headers.get('Content-Length')
+            try:
+                if declared_length is None:
+                    raise ValueError
+                length = int(declared_length)
+            except (TypeError, ValueError):
+                return self._send_json({'ok': False, 'error': 'valid Content-Length required'}, status=400)
+            if length < 0:
+                return self._send_json({'ok': False, 'error': 'valid Content-Length required'}, status=400)
+            if length > 64 * 1024:
+                return self._send_json({'ok': False, 'error': 'follow-up request payload is too large'}, status=413)
+            ctype = self.headers.get('Content-Type', '')
+            raw = self.rfile.read(length)
+            try:
+                return self._handle_followup_post(followup_match, raw, ctype, length)
+            except FollowUpError as e:
+                return self._send_json({'ok': False, 'error': str(e)}, status=getattr(e, 'status', 400))
+            except FileNotFoundError as e:
+                return self._send_json({'ok': False, 'error': f'task not found: {e}'}, status=404)
+            except ValueError as e:
+                return self._send_json({'ok': False, 'error': str(e)}, status=400)
+            except Exception as e:
+                return self._send_json({'ok': False, 'error': f'unexpected error: {e}'}, status=500)
+
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
+        raw = self.rfile.read(length) if length >= 0 else b''
         ctype = self.headers.get('Content-Type', '')
         try:
             if parsed.path == '/api/upload-input':
@@ -1539,26 +1585,6 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(raw.decode('utf-8'))
             else:
                 payload = {k: v[0] for k, v in parse_qs(raw.decode('utf-8')).items()}
-
-            followup_match = re.fullmatch(r'/api/tasks/([^/]+)/follow-up-requests', parsed.path)
-            if followup_match:
-                if not self._followup_origin_allowed():
-                    return self._send_json({'ok': False, 'error': 'same-origin Origin header required'}, status=403)
-                if 'application/json' not in ctype:
-                    return self._send_json({'ok': False, 'error': 'application/json content type required'}, status=415)
-                if length > 64 * 1024:
-                    return self._send_json({'ok': False, 'error': 'follow-up request payload is too large'}, status=413)
-                if not followup_capabilities().get('write_enabled'):
-                    return self._send_json({'ok': False, 'error': 'follow-up request write is disabled'}, status=503)
-                task_id = unquote(followup_match.group(1))
-                request, created = submit_followup_request(
-                    task_id,
-                    payload,
-                    self.headers.get('Idempotency-Key', ''),
-                    requests_dir=FOLLOWUP_REQUESTS_DIR,
-                    task_exists=_task_exists,
-                )
-                return self._send_json({'ok': True, 'request': request, 'parent_task_changed': False}, status=201 if created else 200)
 
             if parsed.path == '/api/tasks':
                 created = write_task_brief(payload)
@@ -1632,6 +1658,34 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send_json({'ok': False, 'error': f'unexpected error: {e}'}, status=500)
 
+    def _handle_followup_post(self, match, raw: bytes, ctype: str, length: int):
+        if not self._followup_listener_allowed() or not self._followup_origin_allowed():
+            return self._send_json({'ok': False, 'error': 'loopback exact-origin required'}, status=403)
+        if ctype != 'application/json':
+            return self._send_json({'ok': False, 'error': 'application/json content type required'}, status=400)
+        if length < 0:
+            return self._send_json({'ok': False, 'error': 'valid Content-Length required'}, status=400)
+        if length > 64 * 1024:
+            return self._send_json({'ok': False, 'error': 'follow-up request payload is too large'}, status=413)
+        if not self.headers.get('Idempotency-Key'):
+            return self._send_json({'ok': False, 'error': 'Idempotency-Key header required'}, status=400)
+        if not followup_capabilities().get('write_enabled'):
+            return self._send_json({'ok': False, 'error': 'follow-up request write is disabled'}, status=503)
+        try:
+            payload = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return self._send_json({'ok': False, 'error': 'valid JSON object required'}, status=400)
+        if not isinstance(payload, dict):
+            return self._send_json({'ok': False, 'error': 'JSON object required'}, status=400)
+        task_id = unquote(match.group(1))
+        request, created = submit_followup_request(
+            task_id, payload, self.headers['Idempotency-Key'],
+            actor_id=followup_capabilities()['actor_id'],
+            auth_source=followup_capabilities()['auth_source'],
+            requests_dir=FOLLOWUP_REQUESTS_DIR, task_exists=_task_exists,
+        )
+        return self._send_json({'ok': True, 'request': request, 'parent_task_changed': False}, status=201 if created else 200)
+
     def _handle_upload_input(self, parsed, raw: bytes):
         params = parse_qs(parsed.query)
         name = os.path.basename(unquote((params.get('name') or [''])[0])).strip()
@@ -1655,6 +1709,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    if not ipaddress.ip_address(HOST).is_loopback:
+        raise SystemExit('operations dashboard follow-up listener must bind to loopback')
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'Operations dashboard running on http://{HOST}:{PORT}')
     server.serve_forever()

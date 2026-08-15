@@ -20,6 +20,7 @@ let taskDetailReturnFocus = null;
 let followUpCapabilities = { write_enabled: false, origin_required: true };
 const followUpDrafts = new Map();
 const followUpIdempotency = new Map();
+const followUpStale = new Map();
 const modalStack = [];
 let detailReturnFocus = null;
 let scrollLockCount = 0;
@@ -1607,16 +1608,22 @@ function renderFollowUpPanel(task) {
   [['supplement', '보완'], ['research', '추가 조사'], ['revision', '수정'], ['verification', '검증'], ['new_artifact', '새 산출물'], ['other', '기타']].forEach(([value, label]) => { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = draft.request_type === value; select.append(option); });
   select.addEventListener('change', () => { draft.request_type = select.value; }); typeLabel.append(select); form.append(typeLabel);
   const status = el('p', 'status-text followup-status'); const submit = el('button', 'primary-btn', 'PM 재평가 요청 제출'); submit.type = 'submit'; form.append(submit, status); section.append(form);
+  const refresh = el('button', 'mini-btn followup-refresh', '현재 이력 새로고침'); refresh.type = 'button'; refresh.hidden = true; section.append(refresh);
+  refresh.addEventListener('click', async () => { await loadFollowUpHistory(task.task_id, history); followUpStale.delete(task.task_id); refresh.hidden = true; status.textContent = '현재 이력을 확인했습니다. 초안을 검토한 뒤 다시 제출할 수 있습니다.'; });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!draft.title.trim() || !draft.desired_outcome.trim()) { status.textContent = '제목과 원하는 결과를 입력해 주세요.'; return; }
+    if (followUpStale.get(task.task_id)) { status.textContent = '이력이 변경되었습니다. 초안을 유지한 채 먼저 현재 이력을 새로고침해 주세요.'; refresh.hidden = false; return; }
     submit.disabled = true; status.textContent = '감사 가능한 요청 레코드 저장 중…';
     const key = followUpIdempotency.get(task.task_id) || `dashboard-${task.task_id}-${crypto.randomUUID()}`; followUpIdempotency.set(task.task_id, key);
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.task_id)}/follow-up-requests`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(draft) });
-      const result = await response.json(); if (!response.ok || !result.ok) throw new Error(result.error || '요청 저장 실패');
+      const result = await response.json(); if (!response.ok || !result.ok) { const error = new Error(result.error || '요청 저장 실패'); error.status = response.status; throw error; }
       followUpDrafts.delete(task.task_id); followUpIdempotency.delete(task.task_id); status.textContent = `접수됨 · ${result.request.request_id} · v${result.request.version} · PM 재평가 대기`; await loadFollowUpHistory(task.task_id, history);
-    } catch (error) { status.textContent = `저장 실패 — 초안은 유지됩니다: ${error.message}`; } finally { submit.disabled = false; }
+    } catch (error) {
+      if (error.status === 409) { followUpStale.set(task.task_id, true); refresh.hidden = false; status.textContent = '이력이 변경되어 제출하지 않았습니다. 초안은 그대로 유지됩니다. 먼저 현재 이력을 새로고침해 주세요.'; }
+      else status.textContent = `저장 실패 — 초안은 유지됩니다: ${error.message}`;
+    } finally { submit.disabled = false; }
   });
   loadFollowUpHistory(task.task_id, history);
   return section;

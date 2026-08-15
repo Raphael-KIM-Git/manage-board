@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import uuid
@@ -74,6 +75,35 @@ def _request_path(parent_task_id: str, request_id: str) -> Path:
     return REQUESTS_DIR / parent_task_id / f"{request_id}.json"
 
 
+def _safe_root(root: Path) -> Path:
+    root = Path(root)
+    try:
+        info = root.lstat()
+    except FileNotFoundError:
+        root.mkdir(parents=True, exist_ok=True)
+        info = root.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise FollowUpError("follow-up request root is not a real directory")
+    return root.resolve()
+
+
+def _safe_parent(root: Path, parent: str, *, create: bool = False) -> Path:
+    root = _safe_root(root)
+    folder = root / parent
+    try:
+        info = folder.lstat()
+    except FileNotFoundError:
+        if not create:
+            return folder
+        folder.mkdir(mode=0o700)
+        info = folder.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise FollowUpError("follow-up request parent directory is unsafe")
+    if folder.resolve().parent != root:
+        raise FollowUpError("follow-up request path escapes storage root")
+    return folder
+
+
 def _payload_fingerprint(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -113,11 +143,16 @@ def _read(path: Path) -> dict[str, Any]:
 def list_requests(parent_task_id: str, requests_dir: Path | None = None) -> list[dict[str, Any]]:
     parent = _safe_id(parent_task_id, "parent_task_id")
     root = requests_dir or REQUESTS_DIR
-    folder = root / parent
+    folder = _safe_parent(root, parent)
     if not folder.is_dir():
         return []
     records = []
     for path in sorted(folder.glob("*.json")):
+        try:
+            if stat.S_ISLNK(path.lstat().st_mode) or path.resolve().parent != _safe_root(root) / parent:
+                continue
+        except OSError:
+            continue
         try:
             record = _read(path)
         except (OSError, ValueError, json.JSONDecodeError):
@@ -170,7 +205,7 @@ def submit_request(
     }
     if clean["priority_requested"] not in ALLOWED_PRIORITIES:
         raise FollowUpError("invalid priority_requested")
-    root = requests_dir or REQUESTS_DIR
+    root = _safe_root(requests_dir or REQUESTS_DIR)
     fingerprint = _payload_fingerprint(clean)
     with _WRITE_LOCK:
         for existing in list_requests(parent, root):
@@ -203,7 +238,7 @@ def submit_request(
 
 def _request_path_for(root: Path, parent: str, request_id: str) -> Path:
     safe_request = _safe_id(request_id, "request_id")
-    return root / parent / f"{safe_request}.json"
+    return _safe_parent(root, parent, create=True) / f"{safe_request}.json"
 
 
 def capabilities() -> dict[str, Any]:
