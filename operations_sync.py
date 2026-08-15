@@ -14,6 +14,9 @@ from pathlib import Path
 
 from artifact_contract import validate_artifact_manifest
 
+# 모듈 해석 루트: 활성 체크아웃 기준 (worktree 격리용)
+MODULE_ROOT = Path(__file__).resolve().parent
+# 데이터 루트: 정규 저장소 고정 (운영 산출물 위치 유지)
 BASE = Path('/home/raphael/myproject')
 OPERATIONS = BASE / 'operations'
 BRIEFS = OPERATIONS / 'briefs'
@@ -33,7 +36,7 @@ ENTRY_RESEARCH_WORKERS = ['HermesResearcher', 'researcher-co', 'researcher_agent
 
 STAGE_BRIEFS.mkdir(parents=True, exist_ok=True)
 
-spec = importlib.util.spec_from_file_location('ops_dashboard_server', BASE / 'operations_dashboard_server.py')
+spec = importlib.util.spec_from_file_location('ops_dashboard_server', MODULE_ROOT / 'operations_dashboard_server.py')
 server = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(server)

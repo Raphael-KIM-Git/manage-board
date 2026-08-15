@@ -13,6 +13,8 @@ class OperationsSyncImportIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkout = Path(temporary_directory)
             shutil.copy2(source_root / "operations_sync.py", checkout / "operations_sync.py")
+            # operations_sync 가 임포트 시점에 요구하는 형제 모듈
+            shutil.copy2(source_root / "artifact_contract.py", checkout / "artifact_contract.py")
             (checkout / "operations_dashboard_server.py").write_text(
                 "from pathlib import Path\n"
                 "Path('local-server-imported.txt').write_text(__file__, encoding='utf-8')\n",
