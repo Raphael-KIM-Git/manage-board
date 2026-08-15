@@ -56,3 +56,14 @@ operations/.sync.lock
 # Local agent-runner state
 .hermes_local_runner.lock
 .worktrees/
+
+# Candidate runtime copies (local working artifacts, not sources)
+runtime-candidate/
+
+# Archived and live runtime state produced by agents
+operations/archive/
+operations/watchdog/
+operations/sync/
+
+# Local pre-change backups
+*.prebak
