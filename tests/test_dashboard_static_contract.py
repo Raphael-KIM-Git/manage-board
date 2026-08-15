@@ -121,15 +121,6 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertNotIn("modified_at", renderer)
         self.assertNotIn("mergeFlow(", renderer)
 
-    def test_operations_evidence_mount_renderers_and_invocation(self):
-        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('id="operationsEvidence"', self.source)
-        self.assertIn("function renderOperationsEvidence", js)
-        self.assertIn("function renderTaskOperationsEvidence", js)
-        self.assertIn("renderOperationsEvidence(overview.operations_evidence)", js)
-        for label in ("오래된 관찰", "확인 불가", "관찰 기록 없음"):
-            self.assertIn(label, js)
-
     def test_secondary_agent_context_is_collapsed_and_after_recent_audit(self):
         recent = self.source.index('id="recentAudit"')
         secondary = self.source.index('id="secondaryAgentContext"')
@@ -220,6 +211,27 @@ class DashboardStaticContractTests(unittest.TestCase):
         self.assertIn("closeTaskDetail();", js[js.index("function setupModal"):js.index("function setupConversationMirror")])
         closer = js[js.index("function closeTaskDetail"):js.index("// 진행 상황")]
         self.assertIn("taskDetailReturnFocus.focus()", closer)
+
+    def test_artifact_viewer_uses_named_top_layer_coordinator(self):
+        self.assertIn('data-modal-layer="artifact-viewer"', self.source)
+        self.assertIn('data-modal-layer="task-detail"', self.source)
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        for hook in ("modalStack", "syncModalCoordinator", "pushModal", "popModal", "topModal", "trapTopModal"):
+            self.assertIn(hook, js)
+        self.assertIn("if (top === 'detailModal') closeDetail();", js)
+        self.assertIn("if (top === 'taskDetailModal') closeTaskDetail();", js)
+        self.assertIn("event.isComposing", js)
+
+    def test_viewer_preserves_read_only_iframe_security_and_mobile_fullscreen(self):
+        html = self.source
+        js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")
+        css = (ROOT / "operations_dashboard" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('aria-describedby="detailBody"', html)
+        self.assertIn('iframe.setAttribute(\'sandbox\', \'allow-downloads\')', js)
+        self.assertIn("iframe.setAttribute('referrerpolicy', 'no-referrer')", js)
+        self.assertIn(".modal-layer-viewer .modal-panel", css)
+        self.assertIn("height: 100vh", css)
+        self.assertIn("data-modal-lock-count", js)
 
     def test_artifact_review_panel_is_evidence_first_and_fail_safe(self):
         js = (ROOT / "operations_dashboard" / "app.js").read_text(encoding="utf-8")

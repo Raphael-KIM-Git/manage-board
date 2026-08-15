@@ -19,6 +19,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from artifact_contract import emit_artifact_manifest
+
 HUB_DIR = Path.home() / "agent-hub"
 INBOX_DIR = HUB_DIR / "inbox"
 RESULTS_DIR = HUB_DIR / "results"
@@ -203,6 +205,7 @@ def write_result(worker_key, brief, brief_file, outcome, started_at):
         "usage": usage,
         "source": "macbook-worker-runner",
     }
+    envelope.update(emit_artifact_manifest(md_path, f"{task_id}:{worker_key}:primary"))
     json_path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
     return envelope
 

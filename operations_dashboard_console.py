@@ -41,6 +41,8 @@ def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, An
         task_id = str(task.get("task_id") or "")
         projection = projections.get(task_id) or {}
         progress = projection.get("progress") or {}
+        # Assignment/configuration is identity evidence, not execution evidence.
+        # Keep an assigned-but-undispatched agent visible without copying task status.
         for agent in task.get("assigned_workers") or []:
             row = ensure(str(agent))
             if task_id and task_id not in row["task_ids"]:

@@ -1,0 +1,116 @@
+{
+  "manifest_version": "1.0",
+  "snapshot": {
+    "root": "/home/raphael/myproject",
+    "branch": "main",
+    "head": "26b3fa476462c1eef5df70b2594a1e8a75f548c1",
+    "captured_before_manifests": true,
+    "mutation_policy": "read-only; no stage/commit/push/deploy/restart"
+  },
+  "candidates": {
+    "t_86a63115": {
+      "title": "v1.1 Slice 1 sync/watchdog evidence",
+      "review_status": "partially_independent; shared server/UI requires isolation",
+      "allowlist": ["operations_dashboard_projection.py", "operations_dashboard_server.py", "operations_dashboard/app.js", "operations_dashboard/index.html", "operations_dashboard/styles.css", "tests/test_dashboard_projection.py", "tests/test_dashboard_static_contract.py", "operations_sync.py", "test_operations_sync.py", "operations_watchdog.py", "tests/test_operations_watchdog.py", "operations/config/research-evidence-policy.v1.json", "operations/sync/latest.json", "operations/watchdog/latest.json", "operations/watchdog/state.json"],
+      "required_commands": ["python3 -m unittest tests.test_dashboard_projection tests.test_dashboard_api_contracts tests.test_dashboard_static_contract tests.test_operations_watchdog test_operations_sync", "node --check operations_dashboard/app.js", "git diff --check"]
+      ,"symbol_locators": ["operations_dashboard_projection.py:96 project_operations_evidence", "operations_dashboard_projection.py:395 project_final_deliverable", "operations_sync.py:306 stage_result_envelopes", "operations_dashboard/app.js:1709 renderOperationsEvidence"]
+    },
+    "t_1631cefc": {
+      "title": "v1.1 follow-up request intake",
+      "review_status": "backend independently reviewable; server/UI shared",
+      "allowlist": ["operations_followup_requests.py", "operations_dashboard_server.py", "operations_dashboard/app.js", "operations_dashboard/styles.css", "tests/test_operations_followup_requests.py", "tests/test_dashboard_http_writes.py"],
+      "required_commands": ["python3 -m unittest -v tests.test_operations_followup_requests tests.test_dashboard_projection tests.test_dashboard_api_contracts tests.test_dashboard_static_contract tests.test_artifact_contract tests.test_operations_watchdog test_operations_sync", "python3 -m py_compile operations_followup_requests.py operations_dashboard_server.py", "node --check operations_dashboard/app.js", "git diff --check"],
+      "known_limitation": "Prior handoff browser run was blocked by missing WSL libnspr4.so; rerun browser acceptance separately."
+      ,"symbol_locators": ["operations_followup_requests.py:113 list_requests", "operations_followup_requests.py:130 submit_request", "operations_dashboard_server.py:1412 _followup_origin_allowed", "operations_dashboard_server.py:1513 Handler.do_POST follow-up route", "operations_dashboard/app.js:1487 renderFollowUpPanel"]
+    },
+    "t_44e06f2c": {
+      "title": "v1.2 Console projection/API and instruction store",
+      "review_status": "backend independently reviewable; server integration shared",
+      "allowlist": ["dashboard_instructions.py", "operations_dashboard_console.py", "operations_dashboard_server.py", "tests/test_dashboard_console_v2.py"],
+      "required_commands": ["python3 -m unittest discover -s tests -p 'test*.py'", "python3 -m py_compile dashboard_instructions.py operations_dashboard_console.py operations_dashboard_server.py", "git diff --check"],
+      "known_limitation": "Prior handoff loopback HTTP smoke was unavailable in its sandbox; Handler transport requires a permitted environment."
+      ,"symbol_locators": ["operations_dashboard_console.py:118 project_console_snapshot", "dashboard_instructions.py:107 submit_instruction", "operations_dashboard_server.py:826 build_dashboard_console", "operations_dashboard_server.py:1421 Handler.do_GET console route", "operations_dashboard_server.py:1513 Handler.do_POST instruction route"]
+    },
+    "artifact_viewer_producer": {
+      "title": "v1.1 artifact producer contract and final viewer",
+      "review_status": "not independently mergeable; shared projection/UI paths need isolation",
+      "allowlist": ["artifact_contract.py", "tests/test_artifact_contract.py", "hermes_local_runner.py", "tmp_worker_runner.py", "Agent-Hub-Dashboard-v1.1-artifact-producer-contract-ko.md", "Agent-Hub-Dashboard-v1.1-final-artifact-viewer-PRD-ko.md", "operations_dashboard_projection.py", "operations_dashboard/app.js", "operations_dashboard/index.html", "operations_dashboard/styles.css", "tests/test_dashboard_projection.py", "tests/test_dashboard_static_contract.py"],
+      "required_commands": ["python3 -m unittest tests.test_artifact_contract tests.test_dashboard_projection tests.test_dashboard_static_contract", "python3 -m py_compile artifact_contract.py hermes_local_runner.py tmp_worker_runner.py", "node --check operations_dashboard/app.js", "git diff --check"]
+      ,"symbol_locators": ["artifact_contract.py:48 validate_artifact_manifest", "artifact_contract.py:98 emit_artifact_manifest", "operations_dashboard_projection.py:395 project_final_deliverable", "operations_dashboard/app.js:35 syncModalCoordinator", "operations_dashboard/app.js:1674 renderFinalDeliverable"]
+    }
+  },
+  "overlap": {
+    "operations_dashboard_server.py": ["t_86a63115", "t_1631cefc", "t_44e06f2c"],
+    "operations_dashboard/app.js": ["t_86a63115", "t_1631cefc", "artifact_viewer_producer"],
+    "operations_dashboard/styles.css": ["t_86a63115", "t_1631cefc", "artifact_viewer_producer"],
+    "operations_dashboard/index.html": ["t_86a63115", "artifact_viewer_producer"],
+    "operations_dashboard_projection.py": ["t_86a63115", "artifact_viewer_producer"],
+    "tests/test_dashboard_projection.py": ["t_86a63115", "artifact_viewer_producer"],
+    "tests/test_dashboard_static_contract.py": ["t_86a63115", "artifact_viewer_producer"]
+  },
+  "review_order": {
+    "sequence": ["baseline_26b3fa4", "t_86a63115", "artifact_viewer_producer", "t_1631cefc", "t_44e06f2c"],
+    "prerequisites": [
+      {"before": "t_86a63115", "after": "artifact_viewer_producer", "reason": "final-deliverable/viewer consumes Slice 1 projection and shares UI contracts"},
+      {"before": "artifact_viewer_producer", "after": "t_1631cefc", "reason": "follow-up UI shares modal/detail shell and server"},
+      {"before": "t_1631cefc", "after": "t_44e06f2c", "reason": "Console server integration must be checked against preserved v1.1 write boundaries"}
+    ],
+    "merge_rule": "No wholesale approval or cherry-pick from this dirty shared tree; require isolated allowlisted patch/worktree."
+  },
+  "unassigned_or_cross_cutting": ["ensure-agent-hub-services.sh", "qa_slice_a_browser.py", "qa_slice_a_interaction.py", "docs/qa/QA-PROGRESS-1B-slice-a-browser-acceptance-ko.md", "docs/qa/evidence/deployed-compact-20260802.png", "docs/qa/evidence/deployed-desktop-20260802.png", "docs/qa/evidence/deployed-tablet-20260802.png", "Agent-Hub-Kanban-Lifecycle-Autocontinue-Plan-ko.md", "operations/kanban/__init__.py", "operations/kanban/cli.py", "operations/kanban/monitor.py", "operations/kanban/reconciler.py", "operations/kanban/registry.py", "operations/kanban/workflows.v1.json", "tests/test_kanban_lifecycle.py", "Agent-Hub-Dashboard-v1.1-progress-and-followup-PRD-ko.md", "Agent-Hub-Dashboard-v1.2-4quadrant-console-UX-UI-design-ko.md", "Agent-Hub-Dashboard-v1.2-PM-operation-policy-decisions-ko.md", "Agent-Hub-Dashboard-v1.2-quadrant-operations-console-PRD-ko.md"],
+  "inventory_sha256": {
+    "docs/qa/dashboard-mvp-phase1.md": "7b492bde68ed6254f2b6e426a54f41f43d9b3ca899d044d21a6634b7624608b6",
+    "ensure-agent-hub-services.sh": "95ff412f90002005fac573d037d090ce3cd7911381b3196190414e5fa695716c",
+    "hermes_local_runner.py": "c14c23d6fbb82c915d9e7f1b27d9ecc8e454613faa713e1b51ed34f8b3a19016",
+    "operations_dashboard/app.js": "8fb05cf8b9f19b40bde076b521e54900c1b48b081bf5b0895604b25589e03360",
+    "operations_dashboard/index.html": "6f296a504942dc8b664565d1f52760213169db90f146be9369419b7e16ff4502",
+    "operations_dashboard/styles.css": "d46e0ecea90ae18f3cc499b05aabf784b3600a8754ffd9ec01eef6b529680d67",
+    "operations_dashboard_projection.py": "20aed603e10c611e623b917531454914d98ff49ecb58ec6741a4da609d14fbb5",
+    "operations_dashboard_server.py": "6cbec3b8ee077ceb7f827dfd3f34cb2a6a12f020e4a7ba25900b052678e24eea",
+    "operations_sync.py": "f6c7aff2159f9f1f14f6a046dfb2fbf590615cf12810f86e987d364bb5c66934",
+    "test_operations_sync.py": "96d4fed88df6bfd6fac1b35b3e5c381418eb74dd26939f6120f793fb17677898",
+    "tests/test_dashboard_projection.py": "7b3f1083e9478286a77300dc5004c7ac04014c5451a115a26ced02996e06dd35",
+    "tests/test_dashboard_static_contract.py": "a55a26737ee9f0d461c532bb11a90614f08f921e663e17e8e837adf41548ca32",
+    "tmp_worker_runner.py": "19b58ad1b868d6d1266999dade488ca38a40e9fba267367cb1d5d2ca4bb73f69",
+    "Agent-Hub-Dashboard-v1.1-artifact-producer-contract-ko.md": "68cc163fa6278c4b38d953572343653276651f490b8d932915b3139903daf299",
+    "Agent-Hub-Dashboard-v1.1-final-artifact-viewer-PRD-ko.md": "9bf377ed3b02171995930955d11388b2ade228fa1a95403f98c4a9b97d0e3179",
+    "Agent-Hub-Dashboard-v1.1-progress-and-followup-PRD-ko.md": "0ca61dce269869829ccae1725fdccc6a1282a094e7a5ab08fd3509012e37bcca",
+    "Agent-Hub-Dashboard-v1.2-4quadrant-console-UX-UI-design-ko.md": "05c090ebec28869273246ee819ccb0f11d891e5230e00042673919d267f748ec",
+    "Agent-Hub-Dashboard-v1.2-PM-operation-policy-decisions-ko.md": "219a163e75293e9036090c87551fa733070350c225e449d25f6f99416af321e6",
+    "Agent-Hub-Dashboard-v1.2-quadrant-operations-console-PRD-ko.md": "d768320617e33001babc07bcf62ff8127a7d12dc873db027227a8bb5ddd2ad56",
+    "Agent-Hub-Kanban-Lifecycle-Autocontinue-Plan-ko.md": "503920d560298e12c011f123c519d96c0982798cccf4732cef6ce34988b554d9",
+    "artifact_contract.py": "2be17227159dedef5a51c3cc3ce4135635b82b7096373c471c49e197e038f90b",
+    "dashboard_instructions.py": "2056f5e85bde2deab1034a879206fab491ea7e05a783d66400c48b27faedaa7c",
+    "docs/qa/QA-PROGRESS-1B-slice-a-browser-acceptance-ko.md": "7800d7dd176b96790f69d704ef8662ada5994e870b14f6b91ec253945874c21f",
+    "docs/qa/evidence/deployed-compact-20260802.png": "41eedf3fcc4064a7fbc1b935fd97e8ba751c54e7d0788b299b13ea219156a49",
+    "docs/qa/evidence/deployed-desktop-20260802.png": "721d9954f6f79f5a2dd213b67441fda5995384a42f3a02efdc1de01e23534ef1",
+    "docs/qa/evidence/deployed-tablet-20260802.png": "a6148b232b3b686afb7cdb036352a2707ae20ed814974f3c73793ea4a3fdccda",
+    "operations/config/research-evidence-policy.v1.json": "689780dd005a52686a1939e2d2213da2b6379f03a66c12de9e4145c905198309",
+    "operations/kanban/__init__.py": "e713994589e9228aaaa363581de96cca599bb8d1161bf6888461426c4a9a4e27",
+    "operations/kanban/cli.py": "cbfe3653e0ee158d9d3e72b3b4001cfbeb33256f9d2384698eb85e82c4ab0b4a",
+    "operations/kanban/monitor.py": "1c0de77f2e9a56b159ce9fe4ac3d2fef380c92e10ab3e7f73079964f56e6d852",
+    "operations/kanban/reconciler.py": "f1e10a90cb6f7efe423a3ae0b4fb0794bbfdec8b9f9dd4a58e42b856a9811b70",
+    "operations/kanban/registry.py": "1efa49d5c13067377dd23dfba40d0965786d3adb4516e6a39989b83c9af91467",
+    "operations/kanban/workflows.v1.json": "df2182f59cd702dcf4dda23d993bd4ec24d3b128676276434732005ab39c48e3",
+    "operations/sync/latest.json": "82894dde9f677d49fd73e5a4baf101e037292db1968d68827cb5c616d52d1b9e",
+    "operations/watchdog/latest.json": "777246b54f4e9ea5829f13fdec5a4a0f28cd97801926118c71c916bf2f8ce994",
+    "operations/watchdog/state.json": "777246b54f4e9ea5829f13fdec5a4a0f28cd97801926118c71c916bf2f8ce994",
+    "operations_dashboard_console.py": "f7be2689a37dbe315d4984855058589f1591cad3cc5329b118c64dc256632d4f",
+    "operations_followup_requests.py": "e57677fb7b714ab710be39188c13dd6d9e2f4da982893555b567fe19a311ad3b",
+    "operations_watchdog.py": "d14194dc1608a375c589acc03b9c1a298906f696ba41aab0aca1142086586674",
+    "qa_slice_a_browser.py": "e075cd63662b9451242605c33275e5da8bc1930808608050c497ad9f0a4ec317",
+    "qa_slice_a_interaction.py": "cd1fbdbb1f2833aace075921e98a56a876171327aacefa059376d856dbc69aad",
+    "tests/test_artifact_contract.py": "834e4351d70e45fe81583856145d57f90ffaae81e17376fe1f80c05e9bf620dd",
+    "tests/test_dashboard_console_v2.py": "95878a47dde095dd5b200725d15323114c76cfc70a2dae8aa7fd551fd8728c81",
+    "tests/test_dashboard_http_writes.py": "4684e30384c5163482d44ece9654541348dd50fa2a414c239b6f18a0e3cb9381",
+    "tests/test_ensure_agent_hub_services.py": "e827f0c483927f814e5001dc7a73d1e0ea52b474b072536e57132a55fa9a1d3f",
+    "tests/test_kanban_lifecycle.py": "9bb729ba4ef1fff7c2e437155e252ec8b8c2bf0fab78b1bd681f7e2d8551b9e0",
+    "tests/test_operations_followup_requests.py": "2c343ed6bac5dc09151c1633e46ae04a82d1afec5c0aff03cf41cb2543e6d5b7",
+    "tests/test_operations_watchdog.py": "42b2400bf4b74a9805bf1890f248692cf3ce0086832523fad219788393d11677"
+  },
+  "notes": [
+    "Hash inventory excludes the two manifest files themselves; hashes were captured before they were written.",
+    "No candidate has an immutable implementation commit locator in the supplied handoffs.",
+    "Generated sync/watchdog JSON is evidence, not source code, and needs freshness/provenance review."
+  ]
+}

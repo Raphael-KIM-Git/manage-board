@@ -8,9 +8,15 @@ import os
 import re
 import subprocess
 import sys
+import stat
 from datetime import datetime
 from pathlib import Path
 
+from artifact_contract import validate_artifact_manifest
+
+# 모듈 해석 루트: 활성 체크아웃 기준 (worktree 격리용)
+MODULE_ROOT = Path(__file__).resolve().parent
+# 데이터 루트: 정규 저장소 고정 (운영 산출물 위치 유지)
 BASE = Path('/home/raphael/myproject')
 OPERATIONS = BASE / 'operations'
 BRIEFS = OPERATIONS / 'briefs'
@@ -18,17 +24,19 @@ RESULTS = OPERATIONS / 'results'
 VERIFICATIONS = OPERATIONS / 'verifications'
 DISPATCHES = OPERATIONS / 'dispatches'
 STAGE_BRIEFS = OPERATIONS / 'stage-briefs'
+RESEARCH_EVIDENCE_POLICY_PATH = OPERATIONS / 'config' / 'research-evidence-policy.v1.json'
 WORKER_STATUS = OPERATIONS / 'worker-status.json'
 KEY = '/home/raphael/.ssh/id_ed25519'
 REMOTE = 'raphael@100.120.123.120:~/agent-hub/results/*'
 GATE_ENABLED = os.environ.get('OPS_GATE_ENABLED', '1') != '0'
 GATE_MAX_REVISE = int(os.environ.get('OPS_GATE_MAX_REVISE', '1'))
 SYNC_LOCK = OPERATIONS / '.sync.lock'
+SYNC_EVIDENCE = OPERATIONS / 'sync' / 'latest.json'
 ENTRY_RESEARCH_WORKERS = ['HermesResearcher', 'researcher-co', 'researcher_agent', 'analyst-co']
 
 STAGE_BRIEFS.mkdir(parents=True, exist_ok=True)
 
-spec = importlib.util.spec_from_file_location('ops_dashboard_server', BASE / 'operations_dashboard_server.py')
+spec = importlib.util.spec_from_file_location('ops_dashboard_server', MODULE_ROOT / 'operations_dashboard_server.py')
 server = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(server)
@@ -48,6 +56,20 @@ def save_json(path: Path, data: dict):
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding='utf-8', errors='replace')
+
+
+def research_evidence_policy() -> dict:
+    return load_json(RESEARCH_EVIDENCE_POLICY_PATH)
+
+
+def research_evidence_policy_text() -> str:
+    policy = research_evidence_policy()
+    rules = '\n'.join(f"- {rule}" for rule in policy.get('acceptance_rules', []))
+    classes = ', '.join(policy.get('observation_classes', []))
+    fields = ', '.join(policy.get('direct_observation_fields', []))
+    return (f"{policy['policy_id']} v{policy['version']}\n"
+            f"관찰 분류: {classes}\n직접 확인 기록 필드: {fields}\n"
+            f"정책 규칙:\n{rules}")
 
 
 def worker_key(name: str) -> str:
@@ -199,7 +221,12 @@ def create_stage_brief(task: dict, stage_id: str, context_text: str, derived_id:
     md_path = STAGE_BRIEFS / f'{derived_id}-{slug}.md'
     json_path = STAGE_BRIEFS / f'{derived_id}-{slug}.json'
 
-    if stage_id == 'writing':
+    if stage_id == 'research':
+        title = f"{task['title']} — research"
+        objective = '외부 근거를 조사하고 관찰별 증거 수준과 미확인 항목을 기록'
+        assigned_workers = task.get('assigned_workers') or ENTRY_RESEARCH_WORKERS
+        deliverable = 'research evidence report with source-level verification metadata'
+    elif stage_id == 'writing':
         title = f"{task['title']} — writing"
         objective = 'research 결과를 종합해 초안 문서를 작성'
         assigned_workers = ['writer-co']
@@ -241,7 +268,10 @@ def create_stage_brief(task: dict, stage_id: str, context_text: str, derived_id:
         },
     }
 
-    md = f'''# Stage Brief\n\n- Parent Task ID: {base_id}\n- Stage Task ID: {derived_id}\n- Stage: {stage_id}\n- Assigned Workers: {", ".join(assigned_workers)}\n\n## Objective\n{objective}\n\n## Context\n{context_text}\n\n## Constraints\n{task.get('constraints') or '(none provided)'}\n\n## Deliverable\n{deliverable}\n'''
+    if stage_id == 'research':
+        data['research_evidence_policy'] = research_evidence_policy()
+    policy_block = f"\n\n## Research Evidence Policy\n{research_evidence_policy_text()}" if stage_id == 'research' else ''
+    md = f'''# Stage Brief\n\n- Parent Task ID: {base_id}\n- Stage Task ID: {derived_id}\n- Stage: {stage_id}\n- Assigned Workers: {", ".join(assigned_workers)}\n\n## Objective\n{objective}\n\n## Context\n{context_text}\n\n## Constraints\n{task.get('constraints') or '(none provided)'}{policy_block}\n\n## Deliverable\n{deliverable}\n'''
     md_path.write_text(md, encoding='utf-8')
     save_json(json_path, data)
     return data
@@ -274,6 +304,78 @@ def dispatch_stage_brief(stage_task: dict) -> dict:
 def stage_completed_by_results(result_map: dict[str, list[dict]], task_id: str) -> bool:
     results = result_map.get(task_id, [])
     return any(r.get('status') == 'completed' for r in results)
+
+
+def stage_result_envelopes(task: dict, stage_id: str,
+                           result_map: dict[str, list[dict]] | None = None) -> tuple[list[dict], list[str]]:
+    """Return only result envelopes that safely prove a derived stage completed.
+
+    A parent stage must never be advanced from a similarly named sidecar.  The
+    envelope task id, derived stage id, worker identity, completion status, and
+    report file are all required evidence.  Invalid/malformed envelopes are
+    returned as reasons for the sync runner's raw evidence output.
+    """
+    if result_map is None:
+        result_map = exact_result_map()
+    stage = find_stage(task, stage_id) or {}
+    expected_id = stage.get('derived_task_id') or stage_task_id(task['task_id'], stage_id)
+    expected_workers = (stage.get('dispatched_workers') or stage.get('agents')
+                        or stage.get('assigned_workers') or [])
+    expected_keys = {worker_key(str(worker)) for worker in expected_workers if worker}
+    accepted: list[dict] = []
+    rejected: list[str] = []
+    envelopes = result_map.get(expected_id, [])
+    completed_worker_counts: dict[str, int] = {}
+    for envelope in envelopes:
+        if isinstance(envelope, dict) and envelope.get('status') == 'completed':
+            worker = envelope.get('worker_key') or envelope.get('worker') or envelope.get('worker_name')
+            if worker:
+                key = worker_key(str(worker))
+                completed_worker_counts[key] = completed_worker_counts.get(key, 0) + 1
+    for envelope in envelopes:
+        if not isinstance(envelope, dict):
+            rejected.append(f'{expected_id}:unparseable')
+            continue
+        worker = envelope.get('worker_key') or envelope.get('worker') or envelope.get('worker_name')
+        actual_worker = worker_key(str(worker)) if worker else ''
+        report_file = envelope.get('report_file')
+        report_path = RESULTS / str(report_file) if isinstance(report_file, str) else None
+        expected_report = f'{expected_id}__{actual_worker}.md' if actual_worker else None
+        reason = None
+        if envelope.get('task_id') != expected_id:
+            reason = 'task_id_mismatch'
+        elif envelope.get('status') != 'completed':
+            reason = f"status_{envelope.get('status') or 'missing'}"
+        elif expected_keys and actual_worker not in expected_keys:
+            reason = 'worker_mismatch'
+        elif (not isinstance(report_file, str) or not report_file.strip()
+              or report_path is None or report_path.name != report_file
+              or report_file != expected_report
+              or report_path.is_symlink()
+              or not report_path.is_file()
+              or not stat.S_ISREG(report_path.stat().st_mode)):
+            reason = 'report_identity_mismatch' if isinstance(report_file, str) and report_file != expected_report else 'report_missing'
+        if reason is None and envelope.get('artifact_schema_version') == 2:
+            manifest_check = validate_artifact_manifest(envelope, RESULTS)
+            if not manifest_check.get('valid'):
+                reason = 'artifact_manifest_' + str(manifest_check.get('reason', 'invalid'))
+        if reason:
+            rejected.append(f'{expected_id}:{actual_worker or "unknown"}:{reason}')
+        else:
+            accepted.append(envelope)
+    if completed_worker_counts.get(next(iter(expected_keys), ''), 0) > 1:
+        rejected.extend(
+            f'{expected_id}:{worker_key(str(item.get("worker_key") or item.get("worker") or "unknown"))}:duplicate_or_ambiguous'
+            for item in envelopes if isinstance(item, dict) and item.get('status') == 'completed'
+        )
+        accepted = []
+    elif len(accepted) > 1:
+        rejected.extend(
+            f'{expected_id}:{worker_key(str(item.get("worker_key") or item.get("worker") or "unknown"))}:duplicate_or_ambiguous'
+            for item in accepted
+        )
+        accepted = []
+    return accepted, rejected
 
 
 def research_stage_complete(task: dict, result_map: dict[str, list[dict]]) -> tuple[bool, str]:
@@ -668,8 +770,19 @@ def dispatch_research(task: dict, workers, feedback: str, notes: list[str]):
             save_json(Path(task['artifacts']['json_brief']), task)
         except Exception:
             pass
-    stub = {**task, 'assigned_workers': valid}
-    result = dispatch_stage_brief(stub)
+    task['research_evidence_policy'] = research_evidence_policy()
+    policy_marker = '[Research Evidence Policy]'
+    constraints = str(task.get('constraints') or '')
+    if policy_marker not in constraints:
+        task['constraints'] = (constraints.rstrip() + '\n\n' + policy_marker + '\n' + research_evidence_policy_text()).strip()
+    save_json(Path(task['artifacts']['json_brief']), task)
+    stage_task = create_stage_brief(
+        {**task, 'assigned_workers': valid}, 'research',
+        feedback or task.get('context', ''), derived_id=task['task_id'],
+    )
+    stage_task['research_evidence_policy'] = task['research_evidence_policy']
+    save_json(Path(stage_task['artifacts']['json_brief']), stage_task)
+    result = dispatch_stage_brief(stage_task)
     research['status'] = 'in_progress' if result['status'] in {'dispatched', 'partially_dispatched'} else 'blocked'
     if research['status'] == 'in_progress':
         consume_live_notes(task)
@@ -865,7 +978,6 @@ def _apply_final_review(task: dict, notes: list):
 
 def sync_task_statuses() -> list[str]:
     notes = []
-    verification_stems = {p.stem for p in VERIFICATIONS.glob('*.md') if p.is_file()}
     result_map = exact_result_map()
 
     for path in sorted(BRIEFS.glob('T-*.json')):
@@ -929,11 +1041,15 @@ def sync_task_statuses() -> list[str]:
                     changed = True
 
         writing_active = active_writing_id(task)
-        writing_done = stage_completed_by_results(result_map, writing_active)
+        writing_envelopes, writing_rejections = stage_result_envelopes(task, 'writing', result_map)
+        writing_done = bool(writing_envelopes)
+        if writing_rejections:
+            notes.append(f'{task_id}:writing evidence rejected=' + '|'.join(writing_rejections))
         if writing and writing_done and writing.get('status') in {'planned', 'queued', 'in_progress'}:
             writing['status'] = 'completed'
             task['status'] = 'results_received'
             changed = True
+            notes.append(f'{task_id}:writing envelope correlated task={writing_active} worker={writing_envelopes[0].get("worker_key")} report={writing_envelopes[0].get("report_file")}')
             if verification and verification.get('status') in {'planned', 'queued'}:
                 verification['status'] = 'queued'
 
@@ -970,9 +1086,10 @@ def sync_task_statuses() -> list[str]:
                     notes.append(f'{task_id}:writing REVISE r{n}')
                 changed = True
 
-        verification_done = stage_completed_by_results(result_map, stage_task_id(task_id, 'verification')) or any(
-            stem.startswith(f'{task_id}__') or stem.startswith(task_id) for stem in verification_stems
-        )
+        verification_envelopes, verification_rejections = stage_result_envelopes(task, 'verification', result_map)
+        verification_done = bool(verification_envelopes)
+        if verification_rejections:
+            notes.append(f'{task_id}:verification evidence rejected=' + '|'.join(verification_rejections))
         if verification and verification_done and verification.get('status') in {'planned', 'queued', 'in_progress'}:
             verification['status'] = 'completed'
             task['status'] = 'results_received'
@@ -993,7 +1110,10 @@ def sync_task_statuses() -> list[str]:
                 if maybe_dispatch_final(task, notes, pm_feedback=feedback):
                     changed = True
 
-        final_done = stage_completed_by_results(result_map, stage_task_id(task_id, 'final_write'))
+        final_envelopes, final_rejections = stage_result_envelopes(task, 'final_write', result_map)
+        final_done = bool(final_envelopes)
+        if final_rejections:
+            notes.append(f'{task_id}:final_write evidence rejected=' + '|'.join(final_rejections))
         if final_write and final_done and final_write.get('status') in {'planned', 'queued', 'in_progress'}:
             final_write['status'] = 'completed'
             task['status'] = 'completed'
@@ -1026,6 +1146,16 @@ if __name__ == '__main__':
     rc, pull_summary = pull_results()
     remote_status_summary = sync_remote_worker_status()
     notes = sync_task_statuses()
+    SYNC_EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+    save_json(SYNC_EVIDENCE, {
+        'observed_at': now_iso(),
+        'pull_exit': rc,
+        'pull_summary': pull_summary,
+        'remote_status_summary': remote_status_summary,
+        'status_updates': notes,
+        'last_result': 'success' if rc == 0 else 'error',
+    })
     print(pull_summary)
     print(remote_status_summary)
     print('status_updates=' + (','.join(notes) if notes else 'none'))
+    print('sync_evidence=' + (','.join(n for n in notes if 'envelope correlated' in n or 'evidence rejected' in n) or 'none'))
