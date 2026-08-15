@@ -1,0 +1,23 @@
+{
+  "policy_id": "research-evidence-policy",
+  "version": "1.0",
+  "title": "Research evidence and verification policy",
+  "observation_classes": [
+    "directly_verified",
+    "indirect_or_search_based_context",
+    "unverified_or_requires_additional_measurement"
+  ],
+  "direct_observation_fields": [
+    "url",
+    "observed_at",
+    "method",
+    "evidence_level"
+  ],
+  "acceptance_rules": [
+    "Do not mark PASS, defect, or complete when browser, authentication, device, or end-to-end checks were not performed.",
+    "Do not infer direct verification from a search snippet, free-text claim, dispatch success, agent completion, or final approval.",
+    "Use GET-only investigation for public pages by default; do not bypass login, write to production, or modify external systems unless explicitly approved.",
+    "Record each agent's scope, constraints, incomplete checks, and recommended follow-up verification in the result."
+  ],
+  "injection_scope": "research_pipeline_only"
+}

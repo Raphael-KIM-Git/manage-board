@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "mode": "dry_run",
+  "state_version": 1,
+  "last_event_id": 0,
+  "workflows": {},
+  "outbox": []
+}
