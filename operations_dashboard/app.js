@@ -17,6 +17,80 @@ let pmReviewState = {
   interpretation: '',
 };
 let taskDetailReturnFocus = null;
+let followUpCapabilities = { write_enabled: false, origin_required: true };
+const followUpDrafts = new Map();
+const followUpIdempotency = new Map();
+const modalStack = [];
+let detailReturnFocus = null;
+let scrollLockCount = 0;
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]', 'area[href]', 'button:not([disabled])', 'input:not([disabled])',
+  'select:not([disabled])', 'textarea:not([disabled])', 'iframe',
+  '[tabindex]:not([tabindex="-1"])', '[contenteditable="true"]',
+].join(',');
+
+function modalNode(id) { return document.getElementById(id); }
+
+function syncModalCoordinator() {
+  const ids = ['briefModal', 'taskDetailModal', 'detailModal'];
+  const openIds = modalStack.filter((id) => {
+    const node = modalNode(id);
+    return node && !node.classList.contains('is-hidden');
+  });
+  ids.forEach((id) => {
+    const node = modalNode(id);
+    if (!node) return;
+    const stackIndex = openIds.indexOf(id);
+    const open = stackIndex >= 0;
+    node.classList.toggle('is-hidden', !open);
+    node.setAttribute('aria-hidden', open ? 'false' : 'true');
+    node.setAttribute('inert', open && stackIndex === openIds.length - 1 ? '' : '');
+    if (open && stackIndex === openIds.length - 1) node.removeAttribute('inert');
+    if (open) node.style.zIndex = String(60 + stackIndex * 10);
+  });
+  const topId = openIds[openIds.length - 1];
+  scrollLockCount = openIds.length;
+  const shell = document.querySelector('.shell');
+  if (shell) {
+    if (topId) shell.setAttribute('inert', '');
+    else shell.removeAttribute('inert');
+  }
+  document.body.classList.toggle('modal-open', Boolean(topId));
+  document.body.dataset.modalLockCount = String(scrollLockCount);
+  document.body.setAttribute('data-modal-lock-count', String(scrollLockCount));
+}
+
+function pushModal(id) {
+  const index = modalStack.indexOf(id);
+  if (index >= 0) modalStack.splice(index, 1);
+  modalNode(id)?.classList.remove('is-hidden');
+  modalStack.push(id);
+  syncModalCoordinator();
+}
+
+function popModal(id) {
+  const index = modalStack.indexOf(id);
+  if (index >= 0) modalStack.splice(index, 1);
+  syncModalCoordinator();
+}
+
+function topModal() { return modalStack[modalStack.length - 1]; }
+
+function focusablesIn(node) {
+  return node ? Array.from(node.querySelectorAll(FOCUSABLE_SELECTOR)).filter((item) => !item.closest('.is-hidden')) : [];
+}
+
+function trapTopModal(event) {
+  const node = modalNode(topModal());
+  if (!node || event.key !== 'Tab') return;
+  const focusables = focusablesIn(node);
+  if (!focusables.length) { event.preventDefault(); return; }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
 
 async function getJson(url) {
   const res = await fetch(url);
@@ -278,6 +352,7 @@ function fallbackProjection(task) {
     work_group: group,
     decision_queue_item: artifacts ? { kind: 'reviewable', question: '검토 가능한 파일이 있습니다', scope: 'unknown', primary_action: '산출물 검토' } : null,
     artifact_summary: { state: task.result_files?.length ? 'available' : 'none', items: task.result_files || [] },
+    final_deliverable: { state: 'unavailable', reason_code: 'projection_missing', label: '최종 결과물 확인 불가', artifact: null, candidates: [], limitations: ['projection_missing'] },
     verification_summary: { state: task.verification_files?.length ? 'available_unstructured' : 'not_run', items: task.verification_files || [] },
     authority_summary: { status: 'history-unavailable' },
     data_quality: [{ kind: 'missing', field: 'dashboard_projection' }],
@@ -893,9 +968,8 @@ async function sendPmChat() {
 
 function setModalOpen(open) {
   const modal = document.getElementById('briefModal');
-  modal.classList.toggle('is-hidden', !open);
-  modal.setAttribute('aria-hidden', open ? 'false' : 'true');
-  document.body.classList.toggle('modal-open', open);
+  if (open) pushModal('briefModal');
+  else popModal('briefModal');
   if (open) {
     renderPmDialogue();
     renderArtifactReferences();
@@ -1041,18 +1115,117 @@ async function autoDispatchQueued(button) {
   }
 }
 
+function consoleStateLabel(state) {
+  return ({ result_received: '결과 도착', dispatch_confirmed: '전송 확인', failed_or_blocked: '실패·보류', not_dispatched: '준비됨', unknown: '알 수 없음' })[state] || state || '알 수 없음';
+}
+
+function consoleRowButton(label, taskId, className = 'console-row-action') {
+  const button = el('button', className, label); button.type = 'button';
+  const task = dashboardState.tasks.find((item) => item.task_id === taskId);
+  if (task) button.addEventListener('click', () => openTaskDetail(task, button));
+  else button.disabled = true;
+  return button;
+}
+
+function renderConsoleSnapshot(snapshot) {
+  const panes = snapshot?.panes || {};
+  const pmRoot = document.getElementById('pmInstructionPaneBody');
+  const agentRoot = document.getElementById('agentsPaneBody');
+  const projectRoot = document.getElementById('projectsPaneBody');
+  const missionRoot = document.getElementById('missionPaneBody');
+  [pmRoot, agentRoot, projectRoot, missionRoot].forEach((root) => { if (root) root.replaceChildren(); });
+  const pm = panes.pm_instruction || {};
+  if (pmRoot) {
+    const records = (pm.recent_instructions || []).slice(0, 3);
+    pmRoot.append(el('div', 'console-summary-strip', `${records.length}개 지시 기록 · 자유 텍스트는 즉시 실행되지 않습니다.`));
+    if (!records.length) pmRoot.append(el('p', 'empty', '표시할 지시 기록 없음'));
+    records.forEach((record) => {
+      const row = el('article', 'console-row instruction-row');
+      row.append(el('strong', 'console-row-title', record.text || '내용 확인 불가'));
+      row.append(el('span', 'console-row-meta', `${record.instruction_id || 'ID 확인 불가'} · ${record.state || '상태 확인 불가'}`));
+      if (record.target_id) row.append(consoleRowButton('업무 상세', record.target_id));
+      pmRoot.append(row);
+    });
+    const action = el('button', 'primary-btn console-composer-entry', '＋ 지시 작성'); action.type = 'button'; action.addEventListener('click', () => setModalOpen(true)); pmRoot.append(action);
+  }
+  const agents = panes.agents?.items || [];
+  if (agentRoot) {
+    if (!agents.length) agentRoot.append(el('p', 'empty', '관찰 가능한 agent 근거 없음'));
+    agents.forEach((agent) => {
+      const row = el('article', 'console-row agent-row');
+      const states = [...(agent.results || [])].reverse();
+      const state = states[0]?.state || (agent.dispatch?.[0]?.state === 'dispatched' ? 'dispatch_confirmed' : 'unknown');
+      row.append(el('div', 'console-row-title', agent.name || agent.agent_id));
+      row.append(el('span', `console-status-badge console-${state}`, consoleStateLabel(state)));
+      row.append(el('span', 'console-row-meta', `현재 ${agent.active_count || 0} · 결과 ${agent.completed_count || 0} · 검토 ${agent.review_count || 0}`));
+      if (agent.task_ids?.[0]) row.append(consoleRowButton('업무 상세', agent.task_ids[0]));
+      agentRoot.append(row);
+    });
+  }
+  const projects = panes.projects?.items || [];
+  if (projectRoot) {
+    if (!projects.length) projectRoot.append(el('p', 'empty', '명시적으로 연결된 프로젝트 없음'));
+    projects.forEach((project) => {
+      const row = el('article', 'console-row project-row');
+      row.append(el('strong', 'console-row-title', project.name || project.project_id));
+      row.append(el('span', 'console-status-badge console-project-state', project.bound ? '연결됨' : '프로젝트 미지정'));
+      row.append(el('span', 'console-row-meta', `진행 ${project.active_count || 0} · 완료 ${project.done_count || 0} · 근거 ${project.latest_evidence_at || '확인 불가'}`));
+      if (project.task_ids?.[0]) row.append(consoleRowButton('관련 업무', project.task_ids[0]));
+      projectRoot.append(row);
+    });
+  }
+  const mission = panes.mission_control?.items || [];
+  const counts = mission.reduce((out, item) => { out[item.kind] = (out[item.kind] || 0) + 1; return out; }, {});
+  const countRoot = document.getElementById('missionControlCounts');
+  if (countRoot) { countRoot.replaceChildren(); [['blocker','blocker'], ['decision','decision'], ['reviewable','reviewable'], ['unknown','unknown']].forEach(([key, label]) => { const item = el('span', `mission-count mission-count-${key}`); item.append(el('strong', 'mission-count-value', String(counts[key] || 0)), el('span', 'mission-count-label', label)); countRoot.append(item); }); }
+  if (missionRoot) {
+    if (!mission.length) missionRoot.append(el('p', 'empty', '현재 확인할 판단 항목 없음'));
+    mission.forEach((item) => {
+      const row = el('article', `console-row mission-row mission-${item.kind || 'unknown'}`);
+      row.append(el('span', 'console-status-badge', (item.kind || 'unknown').toUpperCase()));
+      row.append(el('strong', 'console-row-title', item.question || '판단 근거 확인 필요'));
+      row.append(el('span', 'console-row-meta', `${item.evidence_at || '근거 시각 확인 불가'} · ${item.limitation || 'raw 상태 읽기 전용'}`));
+      if (item.target?.id) row.append(consoleRowButton('상세 근거', item.target.id));
+      missionRoot.append(row);
+    });
+  }
+  document.getElementById('consoleStatus').textContent = `${snapshot?.snapshot_id || 'snapshot 확인 불가'} · ${snapshot?.generated_at || '생성 시각 확인 불가'}`;
+}
+
+function setupConsoleLayout() {
+  const grid = document.getElementById('consoleGrid'); if (!grid) return;
+  const key = 'console-layout-v2:desktop'; const defaults = { left: 50, top: 46 };
+  const read = () => { try { const value = JSON.parse(localStorage.getItem(key) || 'null'); return value && Number.isFinite(value.left) && Number.isFinite(value.top) ? value : defaults; } catch (_) { return defaults; } };
+  const apply = (value) => { grid.style.setProperty('--console-left', `${Math.max(30, Math.min(70, value.left))}%`); grid.style.setProperty('--console-top', `${Math.max(35, Math.min(65, value.top))}%`); };
+  apply(read());
+  document.getElementById('resetConsoleLayoutBtn')?.addEventListener('click', () => { localStorage.removeItem(key); apply(defaults); document.getElementById('consoleStatus').textContent = '기본 레이아웃으로 초기화했습니다.'; });
+  [['vertical', 'col-resize'], ['horizontal', 'row-resize']].forEach(([orientation, cursor]) => {
+    const handle = document.createElement('button'); handle.type = 'button'; handle.className = `console-divider console-divider-${orientation}`; handle.setAttribute('role', 'separator'); handle.setAttribute('aria-orientation', orientation === 'vertical' ? 'vertical' : 'horizontal'); handle.setAttribute('aria-label', orientation === 'vertical' ? '콘솔 열 너비 조절' : '콘솔 행 높이 조절'); handle.tabIndex = 0; grid.append(handle);
+    const move = (delta) => { const value = read(); value[orientation === 'vertical' ? 'left' : 'top'] += delta; apply(value); try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} };
+    handle.addEventListener('keydown', (event) => { if (event.key === 'Home') { event.preventDefault(); apply(defaults); } else if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) { event.preventDefault(); move((event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) * (event.shiftKey ? 5 : 2)); } });
+    let start = null; handle.addEventListener('pointerdown', (event) => { start = { x: event.clientX, y: event.clientY, value: read() }; handle.setPointerCapture(event.pointerId); document.body.style.cursor = cursor; });
+    handle.addEventListener('pointermove', (event) => { if (!start) return; const delta = orientation === 'vertical' ? ((event.clientX - start.x) / Math.max(1, grid.clientWidth)) * 100 : ((event.clientY - start.y) / Math.max(1, grid.clientHeight)) * 100; const value = { ...start.value }; value[orientation === 'vertical' ? 'left' : 'top'] += delta; apply(value); });
+    const end = () => { if (!start) return; try { localStorage.setItem(key, JSON.stringify(read())); } catch (_) {} start = null; document.body.style.cursor = ''; }; handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
+  });
+  const nav = document.getElementById('consoleJumpNav'); [['panePmInstruction','01 · 지시'],['paneAgents','02 · Agents'],['paneProjects','03 · Projects'],['paneMissionControl','04 · 판단']].forEach(([id,label]) => { const link = el('a', 'console-jump-link', label); link.href = `#${id}`; nav.append(link); });
+}
+
 async function loadDashboard() {
-  const [overview, tasks, results, verifications, digests] = await Promise.all([
+  const [overview, tasks, results, verifications, digests, capabilities, consoleSnapshot] = await Promise.all([
     getJson('/api/overview'),
     getJson('/api/tasks'),
     getJson('/api/results'),
     getJson('/api/verifications'),
     getJson('/api/digests'),
+    getJson('/api/follow-up-request-capabilities'),
+    getJson('/api/dashboard-console'),
   ]);
 
   dashboardState = { overview, tasks, results, verifications, digests };
-  renderOperationsEvidence(overview.operations_evidence);
+  followUpCapabilities = capabilities || { write_enabled: false, origin_required: true };
+  renderConsoleSnapshot(consoleSnapshot);
   renderMissionControl(overview.dashboard_summary, tasks || []);
+  renderOperationsEvidence(overview.operations_evidence);
   renderDecisionQueue(tasks || []);
   renderReviewableArtifacts(tasks || []);
   renderTasks(tasks || []);
@@ -1140,7 +1313,14 @@ function setupModal() {
     if (event.target?.dataset?.closeModal === 'true') setModalOpen(false);
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { setModalOpen(false); closeDetail(); closeTaskDetail(); }
+    if (event.isComposing) return;
+    if (event.key === 'Tab') { trapTopModal(event); return; }
+    if (event.key === 'Escape') {
+      const top = topModal();
+      if (top === 'detailModal') closeDetail();
+      else if (top === 'taskDetailModal') closeTaskDetail();
+      else if (top === 'briefModal') setModalOpen(false);
+    }
   });
 }
 
@@ -1164,11 +1344,11 @@ function setupPmChat() {
 
 document.getElementById('taskForm').addEventListener('submit', submitTask);
 document.getElementById('refreshBtn').addEventListener('click', loadDashboard);
-document.getElementById('autoDispatchBtn').addEventListener('click', (e) => autoDispatchQueued(e.currentTarget));
 setupAdvancedToggle();
 setupModal();
 setupConversationMirror();
 setupPmChat();
+setupConsoleLayout();
 loadDashboard().catch((err) => {
   document.getElementById('formStatus').textContent = `초기 로드 실패: ${err.message}`;
 });
@@ -1237,6 +1417,7 @@ function detailDirForKind(kind) {
 
 function openDetail(dir, name) {
   const modal = document.getElementById('detailModal');
+  detailReturnFocus = document.activeElement;
   const rawUrl = `/files/${dir}/${encodeURIComponent(name)}`;
   const ext = (name.split('.').pop() || '').toLowerCase();
   const dirLabel = { results: '도착한 결과', verifications: '검토 메모', digests: '운영 기록' }[dir] || dir;
@@ -1264,16 +1445,18 @@ function openDetail(dir, name) {
       .then((text) => { pre.textContent = ext === 'json' ? JSON.stringify(JSON.parse(text), null, 2) : text; })
       .catch((err) => { pre.textContent = err.message; });
   }
-  modal.classList.remove('is-hidden');
-  modal.setAttribute('aria-hidden', 'false');
+  pushModal('detailModal');
+  setTimeout(() => document.getElementById('closeDetailBtn')?.focus(), 0);
 }
 
 function closeDetail() {
   const modal = document.getElementById('detailModal');
   if (!modal) return;
-  modal.classList.add('is-hidden');
-  modal.setAttribute('aria-hidden', 'true');
+  popModal('detailModal');
   document.getElementById('detailBody').innerHTML = '';
+  if (detailReturnFocus && typeof detailReturnFocus.focus === 'function' && document.contains(detailReturnFocus)) detailReturnFocus.focus();
+  else if (topModal() === 'taskDetailModal') document.getElementById('closeTaskDetailBtn')?.focus();
+  detailReturnFocus = null;
 }
 
 function detailValue(value, fallback = '확인 불가') {
@@ -1391,6 +1574,61 @@ function renderTaskLiveNoteContext(task) {
   inputRow.append(noteInput, sendBtn);
   section.append(inputRow);
   return section;
+}
+
+function followUpDraft(taskId) {
+  if (!followUpDrafts.has(taskId)) followUpDrafts.set(taskId, { title: '', desired_outcome: '', context: '', request_type: 'supplement', priority_requested: 'medium' });
+  return followUpDrafts.get(taskId);
+}
+
+function renderFollowUpPanel(task) {
+  const section = el('section', 'task-detail-followup');
+  section.append(el('h3', 'task-detail-section-title', 'Follow-up request'));
+  section.append(el('p', 'task-detail-meta', '추가 작업 의도만 접수합니다. 제출 즉시 실행·승인·dispatch되지 않으며 PM 재평가 대기로 남습니다. 원본 task와 완료 상태는 변경되지 않습니다.'));
+  const history = el('div', 'followup-history');
+  section.append(el('h4', 'followup-subtitle', '요청 이력'));
+  history.append(el('p', 'empty', '요청 이력을 불러오는 중…'));
+  section.append(history);
+  if (!followUpCapabilities.write_enabled) {
+    section.append(el('p', 'followup-disabled', '인증 또는 same-origin 사전조건이 확인되지 않아 요청 작성은 비활성화되어 있습니다.'));
+    return section;
+  }
+  section.append(el('h4', 'followup-subtitle', '새 요청'));
+  const draft = followUpDraft(task.task_id);
+  const form = el('form', 'followup-form');
+  [['title', '요청 제목', '예: 모바일 실기기 검증 추가', 180], ['desired_outcome', '원하는 결과', '무엇이 남아야 하는지 구체적으로 적어 주세요.', 1200], ['context', '배경과 제약', '기존 결과의 어떤 부분을 보완하는지 (선택)', 1200]].forEach(([name, label, placeholder, max]) => {
+    const labelNode = document.createElement('label'); labelNode.className = 'followup-field'; labelNode.append(el('span', '', label));
+    const input = name === 'title' ? document.createElement('input') : document.createElement('textarea');
+    input.name = name; input.maxLength = max; input.placeholder = placeholder; input.value = draft[name] || ''; input.required = name !== 'context';
+    input.addEventListener('input', () => { draft[name] = input.value; }); labelNode.append(input); form.append(labelNode);
+  });
+  const typeLabel = document.createElement('label'); typeLabel.className = 'followup-field'; typeLabel.append(el('span', '', '요청 유형'));
+  const select = document.createElement('select'); select.name = 'request_type';
+  [['supplement', '보완'], ['research', '추가 조사'], ['revision', '수정'], ['verification', '검증'], ['new_artifact', '새 산출물'], ['other', '기타']].forEach(([value, label]) => { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = draft.request_type === value; select.append(option); });
+  select.addEventListener('change', () => { draft.request_type = select.value; }); typeLabel.append(select); form.append(typeLabel);
+  const status = el('p', 'status-text followup-status'); const submit = el('button', 'primary-btn', 'PM 재평가 요청 제출'); submit.type = 'submit'; form.append(submit, status); section.append(form);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!draft.title.trim() || !draft.desired_outcome.trim()) { status.textContent = '제목과 원하는 결과를 입력해 주세요.'; return; }
+    submit.disabled = true; status.textContent = '감사 가능한 요청 레코드 저장 중…';
+    const key = followUpIdempotency.get(task.task_id) || `dashboard-${task.task_id}-${crypto.randomUUID()}`; followUpIdempotency.set(task.task_id, key);
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.task_id)}/follow-up-requests`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(draft) });
+      const result = await response.json(); if (!response.ok || !result.ok) throw new Error(result.error || '요청 저장 실패');
+      followUpDrafts.delete(task.task_id); followUpIdempotency.delete(task.task_id); status.textContent = `접수됨 · ${result.request.request_id} · v${result.request.version} · PM 재평가 대기`; await loadFollowUpHistory(task.task_id, history);
+    } catch (error) { status.textContent = `저장 실패 — 초안은 유지됩니다: ${error.message}`; } finally { submit.disabled = false; }
+  });
+  loadFollowUpHistory(task.task_id, history);
+  return section;
+}
+
+async function loadFollowUpHistory(taskId, root) {
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/follow-up-requests`); const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || '이력 조회 실패');
+    root.innerHTML = ''; if (!result.requests.length) { root.append(el('p', 'empty', '아직 제출한 후속 요청이 없습니다.')); return; }
+    result.requests.forEach((request) => { const row = el('article', 'followup-history-row'); row.append(el('strong', '', `${request.request_id} · v${request.version} · ${request.state}`)); row.append(el('span', '', request.title)); row.append(el('small', '', `${request.submitted_at} · ${request.submitted_by?.actor_id || 'server actor'}`)); row.append(el('p', 'followup-history-outcome', request.desired_outcome || '원하는 결과 확인 불가')); root.append(row); });
+  } catch (error) { root.innerHTML = ''; root.append(el('p', 'followup-disabled', `이력 확인 불가: ${error.message}`)); }
 }
 
 function rawGateLabel(row, index) {
@@ -1530,27 +1768,77 @@ function renderArtifactReviewPanel(task, projection) {
   return panel;
 }
 
+function renderFinalDeliverable(task, projection) {
+  const final = projection?.final_deliverable || { state: 'unavailable', label: '최종 결과물 확인 불가', candidates: [], limitations: ['projection_missing'] };
+  const confirmed = final.state === 'confirmed' && final.artifact?.name;
+  const stateLabels = { confirmed: '확인됨', candidate_unconfirmed: '근거 부족', ambiguous: '후보 여러 개', conflict: '근거 충돌', unavailable: '확인 불가', unknown: '확인 불가' };
+  const section = el('section', `final-deliverable-section final-deliverable-${final.state || 'unknown'}`);
+  const heading = el('div', 'final-deliverable-heading');
+  heading.append(el('span', 'final-deliverable-kicker', 'FINAL DELIVERABLE'));
+  heading.append(el('span', 'final-deliverable-badge', stateLabels[final.state] || '확인 불가'));
+  section.append(heading);
+  section.append(el('h3', 'final-deliverable-title', confirmed ? final.artifact.name : '최종 결과물 확인 불가'));
+  const description = confirmed
+    ? (final.source_mode === 'final_write' ? '최종 작성 결과와 artifact 연결이 확인되었습니다.' : '최종 작성은 생략되었으며 writing 산출물이 검증·PM review와 동일 artifact로 연결되었습니다.')
+    : (final.reason_code === 'multiple_equal_candidates' ? '후보가 여러 개여서 최종 결과물을 확인할 수 없습니다.' : '최종 결과물로 확정할 수 있는 artifact binding 근거가 부족합니다.');
+  section.append(el('p', 'final-deliverable-description', description));
+  const facts = el('div', 'final-deliverable-facts');
+  const stage = final.deliverable_stage || {};
+  [['source stage', stage.id], ['stage status', stage.raw_status], ['active attempt', stage.derived_task_id], ['version', final.artifact?.version || '확인 불가'], ['verification', final.verification?.state], ['PM final review', final.pm_final_review?.verdict || final.pm_final_review?.state]].forEach(([label, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    const fact = el('div', 'final-deliverable-fact');
+    fact.append(el('span', 'final-deliverable-fact-label', label));
+    fact.append(el('strong', 'final-deliverable-fact-value', String(value)));
+    facts.append(fact);
+  });
+  if (facts.childNodes.length) section.append(facts);
+  if (confirmed) {
+    const open = el('button', 'mini-btn final-deliverable-open', '최종 결과물 열기');
+    open.type = 'button';
+    open.addEventListener('click', () => openDetail(final.artifact.dir || 'results', final.artifact.name));
+    section.append(open);
+  } else {
+    section.append(el('p', 'final-deliverable-guidance', `일반 Artifacts에서 후보 확인 · 후보 ${final.candidates?.length || 0}개`));
+  }
+  return section;
+}
+
 function renderOperationsEvidence(evidence) {
   const root = document.getElementById('operationsEvidence');
   if (!root) return;
-  root.replaceChildren();
-  root.append(el('strong', '', '운영 관찰 근거'));
-  root.append(renderTaskOperationsEvidence(evidence));
-}
-
-function renderTaskOperationsEvidence(evidence) {
+  root.innerHTML = '';
+  const heading = el('div', 'operations-evidence-heading');
+  heading.append(el('strong', '', '운영 관찰 근거'));
+  heading.append(el('span', 'task-detail-meta', '전역 관찰은 raw task 상태를 덮어쓰지 않습니다.'));
+  root.append(heading);
   const grid = el('div', 'operations-evidence-grid');
   [['sync', 'Sync'], ['watchdog', 'Watchdog']].forEach(([key, label]) => {
     const item = evidence?.[key] || { state: 'unknown' };
     const state = item.state || 'unknown';
     const row = el('div', `operations-evidence-item evidence-${state}`);
     row.append(el('span', 'operations-evidence-label', label));
-    row.append(el('strong', 'operations-evidence-state', ({ success: '성공', error: '오류', stale: '오래된 관찰', never_observed: '관찰 기록 없음', unknown: '확인 불가' }[state] || '확인 불가')));
+    row.append(el('strong', 'operations-evidence-state', ({ success: '성공', error: '오류', stale: '오래된 관찰', never_observed: '관찰 기록 없음', unknown: '확인 불가' }[state] || state)));
     row.append(el('span', 'operations-evidence-meta', item.observed_at ? `관찰 ${item.observed_at}` : '관찰 시각 없음'));
-    if (item.source_limitation) row.append(el('span', 'operations-evidence-limit', `한계 · ${item.source_limitation}`));
+    if (item.source_limitation) row.append(el('span', 'operations-evidence-limit', `한계 · ${item.source_limitation === 'malformed_snapshot' ? 'unknown · malformed_snapshot' : item.source_limitation}`));
+    if (key === 'sync') row.append(el('span', 'operations-evidence-meta', `task 전이 근거 ${item.task_transition_evidence?.length || 0}건`));
     grid.append(row);
   });
-  return grid;
+  root.append(grid);
+}
+
+function renderTaskOperationsEvidence(task) {
+  const wrap = el('div', 'task-operations-evidence');
+  const evidence = taskProjection(task).operations_evidence || task.operations_evidence || {};
+  [['sync', 'Sync'], ['watchdog', 'Watchdog']].forEach(([key, label]) => {
+    const item = evidence[key] || { state: 'unknown' };
+    const line = el('div', `task-operations-evidence-row evidence-${item.state || 'unknown'}`);
+    line.append(el('strong', '', `${label} · ${item.state || 'unknown'}`));
+    line.append(el('span', '', item.observed_at ? `observed_at ${item.observed_at}` : '관찰 시각 없음'));
+    if (item.source_limitation) line.append(el('span', 'data-quality-note', `한계 · ${item.source_limitation === 'malformed_snapshot' ? 'unknown · malformed_snapshot' : item.source_limitation}`));
+    if (key === 'sync') line.append(el('span', '', `task 전이 근거 ${item.task_transition_evidence?.length || 0}건`));
+    wrap.append(line);
+  });
+  return wrap;
 }
 
 function renderTaskDetail(task) {
@@ -1562,7 +1850,7 @@ function renderTaskDetail(task) {
     return;
   }
   const projection = taskProjection(task);
-  body.append(detailSection('Sync / Watchdog evidence', 'task-detail-operations-evidence', renderTaskOperationsEvidence(task.operations_evidence || projection.operations_evidence || {})));
+  body.append(renderFinalDeliverable(task, projection));
   const outcome = el('div', 'task-detail-copy');
   outcome.append(el('p', 'task-detail-lead', detailValue(task.objective, '업무 목표 확인 불가')));
   outcome.append(el('p', 'task-detail-meta', `${humanStatus(task.status)} · ${detailValue(task.updated_at || task.created_at, '시간 확인 불가')}`));
@@ -1581,6 +1869,7 @@ function renderTaskDetail(task) {
 
   // Evidence-first sections: 'Artifacts' -> 'Verification'.
   body.append(renderArtifactReviewPanel(task, projection));
+  body.append(detailSection('Sync / Watchdog evidence', 'task-detail-operations-evidence', renderTaskOperationsEvidence(task)));
   body.append(detailSection('Evidence quality & limits', 'task-detail-evidence-section', renderEvidenceLimits(task)));
 
   const authority = el('div', 'task-detail-copy');
@@ -1592,6 +1881,7 @@ function renderTaskDetail(task) {
   authority.append(renderRawGateAudit(projection));
   body.append(detailSection('Authority / Audit', 'task-detail-authority-audit', authority));
   if (!['completed', 'cancelled'].includes(task.status)) body.append(renderTaskLiveNoteContext(task));
+  body.append(renderFollowUpPanel(task));
 }
 
 function openTaskDetail(task, returnFocus) {
@@ -1600,18 +1890,16 @@ function openTaskDetail(task, returnFocus) {
   taskDetailReturnFocus = returnFocus || document.activeElement;
   document.getElementById('taskDetailTitle').textContent = detailValue(task?.title || task?.task_id, '업무 상세');
   renderTaskDetail(task);
-  modal.classList.remove('is-hidden');
-  modal.setAttribute('aria-hidden', 'false');
-  document.getElementById('closeTaskDetailBtn')?.focus();
+  pushModal('taskDetailModal');
+  setTimeout(() => document.getElementById('closeTaskDetailBtn')?.focus(), 0);
 }
 
 function closeTaskDetail() {
   const modal = document.getElementById('taskDetailModal');
   if (!modal) return;
-  modal.classList.add('is-hidden');
-  modal.setAttribute('aria-hidden', 'true');
+  popModal('taskDetailModal');
   document.getElementById('taskDetailBody').innerHTML = '';
-  if (taskDetailReturnFocus && typeof taskDetailReturnFocus.focus === 'function') taskDetailReturnFocus.focus();
+  if (taskDetailReturnFocus && typeof taskDetailReturnFocus.focus === 'function' && document.contains(taskDetailReturnFocus)) taskDetailReturnFocus.focus();
   taskDetailReturnFocus = null;
 }
 

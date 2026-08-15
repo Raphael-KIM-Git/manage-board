@@ -9,78 +9,27 @@
 </head>
 <body>
   <div class="shell">
-    <header class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Warm Brief Command</p>
-        <h1>Raphael Agent Hub</h1>
-        <p class="sub">전체 에이전트 체계를 먼저 보고, 필요할 때 PM과 대화하듯 업무지시서를 열어 만들고, 최근 결과와 검토 흐름을 이어보는 운영 작업공간</p>
-      </div>
-      <div class="hero-actions">
-        <button id="openBriefModalBtn" class="primary-btn">업무 지시 작성</button>
-        <button id="autoDispatchBtn" class="secondary-btn">대기 중인 일 보내기</button>
-        <button id="refreshBtn" class="ghost-btn">새로고침</button>
-      </div>
+    <header class="hero console-hero">
+      <div class="hero-copy"><p class="eyebrow">Operations Console</p><h1>Raphael Agent Hub</h1><p class="sub">raw 근거를 읽기 전용으로 표시합니다. 지시는 PM 검토와 분리해 기록합니다.</p></div>
+      <div class="hero-actions"><button id="openBriefModalBtn" class="primary-btn">업무 지시 작성</button><button id="refreshBtn" class="ghost-btn">새로고침</button><button id="resetConsoleLayoutBtn" class="ghost-btn">레이아웃 초기화</button></div>
     </header>
-
-    <section id="missionControlHeader" class="panel mission-control-panel">
-      <div class="section-head">
-        <div>
-          <p class="section-kicker">Mission Control</p>
-          <h2>지금 판단할 일</h2>
-          <p class="hint">현재 raw 근거로 확인할 수 있는 흐름만 요약합니다. 확인할 수 없는 상태는 별도로 남깁니다.</p>
-        </div>
-        <div id="missionControlCounts" class="mission-control-counts"></div>
-      </div>
+    <nav id="consoleJumpNav" class="console-jump-nav" aria-label="콘솔 영역 바로가기"></nav>
+    <p id="consoleStatus" class="console-status" aria-live="polite"></p>
+    <main id="consoleGrid" class="console-grid" aria-label="4사분면 운영 콘솔">
+      <section id="panePmInstruction" class="console-pane pane-pm panel" data-pane="pm_instruction"><div class="console-pane-head"><p class="pane-kicker">01 · PM CONVERSATION</p><h2>대화와 지시</h2><p class="hint">현재 맥락과 PM 재검토 대기 지시를 기록합니다.</p></div><div id="pmInstructionPaneBody" class="console-pane-body"></div></section>
+      <section id="paneAgents" class="console-pane pane-agents panel" data-pane="agents"><div class="console-pane-head"><p class="pane-kicker">02 · AGENTS</p><h2>에이전트 근거</h2><p class="hint">준비·전송·결과·실패를 분리해 봅니다.</p></div><div id="agentsPaneBody" class="console-pane-body"></div></section>
+      <section id="paneProjects" class="console-pane pane-projects panel" data-pane="projects"><div class="console-pane-head"><p class="pane-kicker">03 · PROJECTS</p><h2>프로젝트 맥락</h2><p class="hint">명시적으로 연결된 프로젝트만 집계합니다.</p></div><div id="projectsPaneBody" class="console-pane-body"></div></section>
+      <section id="paneMissionControl" class="console-pane pane-mission panel" data-pane="mission_control"><div class="console-pane-head"><p class="pane-kicker">04 · MISSION CONTROL</p><h2>지금 판단할 일</h2><p class="hint">blocker·decision·reviewable·unknown을 읽기 전용으로 확인합니다.</p><div id="missionControlCounts" class="mission-control-counts"></div></div><div id="missionPaneBody" class="console-pane-body"></div></section>
+    </main>
+    <section id="legacyConsoleData" class="legacy-console-data" aria-hidden="true">
+      <section id="missionControlHeader"></section><section id="decisionQueue"><div id="decisionQueueList"></div></section><section id="activeWorkBoard"><div id="taskSummary"></div><div id="taskBoard"></div></section><section id="reviewableArtifacts"><div id="reviewableArtifactsList"></div></section><section id="recentAudit"><p class="section-kicker">Recent Audit</p><div id="recentFlow"></div></section>
     </section>
-
-    <section id="decisionQueue" class="panel decision-queue-panel">
-      <div class="section-head">
-        <div>
-          <p class="section-kicker">Decision Queue</p>
-          <h2>먼저 판단할 일</h2>
-          <p class="hint">보류·최종 검토·검증 근거 순서로, 실제 증거가 있는 항목만 보여줍니다.</p>
-        </div>
-      </div>
-      <div id="decisionQueueList" class="decision-queue-list"></div>
-    </section>
-
-    <section id="activeWorkBoard" class="panel decision-panel">
-      <div class="section-head">
-        <div>
-          <p class="section-kicker">Active Work Board</p>
-          <h2>업무 보드</h2>
-          <p class="hint">최근순이 아니라 지금 개입이 필요한 순서대로 정리됩니다.</p>
-        </div>
-        <div id="taskSummary" class="mini-summary"></div>
-      </div>
-      <div id="taskBoard" class="task-board"></div>
-    </section>
-
-    <section id="reviewableArtifacts" class="panel reviewable-artifacts-panel">
-      <div class="section-head"><div><p class="section-kicker">Reviewable Artifacts</p><h2>검토 가능한 산출물</h2><p class="hint">현재 응답에서 확인되는 결과·검증 파일만 모아 봅니다.</p></div></div>
-      <div id="reviewableArtifactsList" class="item-list compact"></div>
-    </section>
-
-    <section id="recentAudit" class="flow-grid">
-      <div class="panel timeline-panel">
-        <div class="section-head"><div><p class="section-kicker">Recent Audit</p><h2>현재 근거와 검토</h2><p class="hint">현재 응답의 raw 근거만 표시합니다. 전체 파일 이력은 아래 보조 맥락에서 따로 확인합니다.</p></div></div>
-        <div id="recentFlow" class="timeline"></div>
-      </div>
-    </section>
-
     <section id="operationsEvidence" class="operations-evidence-panel panel-subtle" aria-live="polite"></section>
-
-    <details id="secondaryAgentContext" class="secondary-context">
-      <summary>보조 에이전트 맥락 · 원본 파일 목록</summary>
-      <div class="secondary-context-grid">
-        <div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">도착한 결과</p><h2>최근 산출물</h2></div></div><div id="resultsList" class="item-list compact"></div></div>
-        <div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">운영 기록</p><h2>다이제스트</h2></div></div><div id="digestsList" class="item-list compact"></div></div>
-      </div>
-    </details>
+    <details id="secondaryAgentContext" class="secondary-context"><summary>보조 에이전트 맥락 · 원본 파일 목록</summary><div class="secondary-context-grid"><div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">도착한 결과</p><h2>최근 산출물</h2></div></div><div id="resultsList" class="item-list compact"></div></div><div class="panel side-panel"><div class="section-head"><div><p class="section-kicker">운영 기록</p><h2>다이제스트</h2></div></div><div id="digestsList" class="item-list compact"></div></div></div></details>
 
   </div>
 
-  <div id="briefModal" class="modal-shell is-hidden" aria-hidden="true">
+  <div id="briefModal" class="modal-shell modal-layer-brief is-hidden" data-modal-layer="brief" aria-hidden="true">
     <div class="modal-backdrop" data-close-modal="true"></div>
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="briefModalTitle">
       <div class="modal-head">
@@ -190,9 +139,9 @@
     </div>
   </div>
 
-  <div id="detailModal" class="modal-shell is-hidden" aria-hidden="true">
+  <div id="detailModal" class="modal-shell modal-layer-viewer is-hidden" data-modal-layer="artifact-viewer" aria-hidden="true">
     <div class="modal-backdrop" data-close-detail="true"></div>
-    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle" aria-describedby="detailBody">
       <div class="modal-head">
         <div class="detail-head-meta">
           <p class="section-kicker" id="detailKicker">결과 상세</p>
@@ -208,7 +157,7 @@
     </div>
   </div>
 
-  <div id="taskDetailModal" class="modal-shell is-hidden" aria-hidden="true">
+  <div id="taskDetailModal" class="modal-shell modal-layer-task is-hidden" data-modal-layer="task-detail" aria-hidden="true">
     <div class="modal-backdrop" data-close-task-detail="true"></div>
     <div class="modal-panel task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle" aria-describedby="taskDetailStatus">
       <div class="modal-head">

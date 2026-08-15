@@ -7,7 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
-from dataclasses import dataclass
+from copy import deepcopy
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,196 +15,15 @@ from urllib.parse import parse_qs, quote as url_quote, unquote, urlparse
 
 from operations_dashboard_projection import build_dashboard_summary, project_operations_evidence, project_task
 from operations_dashboard_console import project_console_snapshot
+from dashboard_instructions import InstructionError, capabilities as instruction_capabilities, list_instructions, submit_instruction
+from operations_followup_requests import (
+    FollowUpError,
+    capabilities as followup_capabilities,
+    list_requests as list_followup_requests,
+    submit_request as submit_followup_request,
+)
 
-CANONICAL_ROOT = Path('/home/raphael/myproject')
-CANONICAL_STATIC_ROOT = CANONICAL_ROOT / 'operations_dashboard'
-
-
-@dataclass(frozen=True)
-class RuntimePaths:
-    runtime_root: Path
-    static_root: Path
-
-    @property
-    def operations_dir(self) -> Path:
-        return self.runtime_root / 'operations'
-
-    @property
-    def operational_dirs(self) -> tuple[Path, ...]:
-        return tuple(self.operations_dir / name for name in (
-            'briefs', 'results', 'verifications', 'digests', 'dispatches',
-            'inputs', 'interviews', 'seeds', 'config',
-        ))
-
-    @property
-    def config_dir(self) -> Path:
-        return self.operations_dir / 'config'
-
-    @property
-    def workers_config_path(self) -> Path:
-        return self.config_dir / 'workers.json'
-
-
-def _absolute_path(value: str | Path, label: str) -> Path:
-    path = Path(value)
-    if not path.is_absolute():
-        raise ValueError(f'{label} must be an absolute path')
-    return path.absolute()
-
-
-def _is_clean_source_worktree(static_root: Path, canonical_root: Path) -> bool:
-    """Allow only assets directly from a registered, clean source worktree."""
-    worktree_root = static_root.parent
-    worktrees_root = canonical_root / '.worktrees'
-    try:
-        relative = worktree_root.relative_to(worktrees_root)
-    except ValueError:
-        return False
-    if len(relative.parts) != 1 or not (worktree_root / '.git').is_file():
-        return False
-    try:
-        top_level = subprocess.run(
-            ['git', '-C', str(worktree_root), 'rev-parse', '--show-toplevel'],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        worktree_common_dir = subprocess.run(
-            ['git', '-C', str(worktree_root), 'rev-parse', '--git-common-dir'],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        canonical_common_dir = subprocess.run(
-            ['git', '-C', str(canonical_root), 'rev-parse', '--git-common-dir'],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        status = subprocess.run(
-            ['git', '-C', str(worktree_root), 'status', '--porcelain', '--untracked-files=all'],
-            check=True, capture_output=True, text=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    return (
-        Path(top_level).resolve(strict=False) == worktree_root
-        and (worktree_root / worktree_common_dir).resolve(strict=False)
-        == (canonical_root / canonical_common_dir).resolve(strict=False)
-        and not status.strip()
-    )
-
-
-def resolve_runtime_paths(env=None, injected=None) -> RuntimePaths:
-    env = os.environ if env is None else env
-    if injected is not None:
-        if isinstance(injected, RuntimePaths):
-            runtime_root, static_root = injected.runtime_root, injected.static_root
-        else:
-            runtime_root = injected.get('runtime_root') or injected.get('runtime')
-            static_root = injected.get('static_root') or injected.get('static')
-        if runtime_root is None or static_root is None:
-            raise ValueError('injected runtime and static roots are required')
-    else:
-        runtime_value = env.get('OPS_DASHBOARD_RUNTIME_ROOT')
-        static_value = env.get('OPS_DASHBOARD_STATIC_ROOT')
-        if bool(runtime_value) != bool(static_value):
-            raise ValueError('OPS_DASHBOARD_RUNTIME_ROOT and OPS_DASHBOARD_STATIC_ROOT must be supplied together')
-        runtime_root = runtime_value or CANONICAL_ROOT
-        static_root = static_value or CANONICAL_STATIC_ROOT
-
-    runtime = _absolute_path(runtime_root, 'runtime root')
-    static = _absolute_path(static_root, 'static root')
-    resolved_runtime = runtime.resolve(strict=False)
-    resolved_static = static.resolve(strict=False)
-    is_legacy_default = injected is None and not env.get('OPS_DASHBOARD_RUNTIME_ROOT')
-    is_explicit_runtime = injected is not None or bool(env.get('OPS_DASHBOARD_RUNTIME_ROOT'))
-    allow_canonical_runtime = (
-        env.get('OPS_DASHBOARD_ALLOW_CANONICAL_RUNTIME') == '1'
-        and bool(env.get('OPS_DASHBOARD_RUNTIME_ROOT'))
-        and bool(env.get('OPS_DASHBOARD_STATIC_ROOT'))
-        and _absolute_path(env['OPS_DASHBOARD_RUNTIME_ROOT'], 'runtime root').resolve(strict=False) == resolved_runtime
-        and _absolute_path(env['OPS_DASHBOARD_STATIC_ROOT'], 'static root').resolve(strict=False) == resolved_static
-    )
-    if resolved_runtime == CANONICAL_ROOT.resolve() and not (
-        is_legacy_default or (is_explicit_runtime and allow_canonical_runtime)
-    ):
-        raise ValueError('runtime root must not be canonical root')
-    if not runtime.is_dir():
-        raise ValueError('runtime root must be an existing directory')
-    if not static.is_dir():
-        raise ValueError('static root must be an existing directory')
-    is_canonical_runtime = resolved_runtime == CANONICAL_ROOT.resolve()
-    if is_canonical_runtime and not is_legacy_default:
-        try:
-            static.relative_to(CANONICAL_ROOT)
-        except ValueError:
-            pass
-        else:
-            try:
-                resolved_static.relative_to(CANONICAL_ROOT.resolve())
-            except ValueError as exc:
-                raise ValueError('static root escapes canonical root') from exc
-    is_allowed_nested_worktree_static = (
-        is_canonical_runtime
-        and allow_canonical_runtime
-        and static == resolved_static
-        and resolved_static.parent.parent == (CANONICAL_ROOT / '.worktrees').resolve()
-        and resolved_static.name == 'operations_dashboard'
-        and _is_clean_source_worktree(resolved_static, CANONICAL_ROOT.resolve())
-    )
-    static_inside_runtime = resolved_static == resolved_runtime or resolved_runtime in resolved_static.parents
-    if not is_legacy_default and static_inside_runtime and not is_allowed_nested_worktree_static:
-        raise ValueError('static root must be outside runtime root')
-    required = ('index.html', 'app.js', 'styles.css', 'detail.html')
-    if any(not (static / name).is_file() for name in required):
-        raise ValueError('static root is missing a required asset')
-    return RuntimePaths(runtime, static)
-
-
-def _validate_operational_containment(paths: RuntimePaths) -> None:
-    runtime = paths.runtime_root.resolve(strict=False)
-    for target in (*paths.operational_dirs, paths.config_dir, paths.workers_config_path):
-        resolved = target.resolve(strict=False)
-        try:
-            resolved.relative_to(runtime)
-        except ValueError as exc:
-            raise ValueError(f'operational path escapes runtime root: {target}') from exc
-
-
-def configure_runtime(paths: RuntimePaths, *, _allow_legacy_default: bool = False) -> RuntimePaths:
-    global BASE_DIR, OPERATIONS_DIR, BRIEFS_DIR, RESULTS_DIR, VERIFICATIONS_DIR
-    global DIGESTS_DIR, DISPATCHES_DIR, INPUTS_DIR, INTERVIEWS_DIR, SEEDS_DIR
-    global CONFIG_DIR, WORKERS_CONFIG_PATH, UI_DIR
-    if _allow_legacy_default:
-        if paths != resolve_runtime_paths(env={}):
-            raise ValueError('legacy default configuration must be resolved explicitly')
-    else:
-        paths = resolve_runtime_paths(injected=paths)
-    _validate_operational_containment(paths)
-    BASE_DIR = paths.runtime_root
-    OPERATIONS_DIR = paths.operations_dir
-    (globals().update({
-        'BRIEFS_DIR': paths.operational_dirs[0], 'RESULTS_DIR': paths.operational_dirs[1],
-        'VERIFICATIONS_DIR': paths.operational_dirs[2], 'DIGESTS_DIR': paths.operational_dirs[3],
-        'DISPATCHES_DIR': paths.operational_dirs[4], 'INPUTS_DIR': paths.operational_dirs[5],
-        'INTERVIEWS_DIR': paths.operational_dirs[6], 'SEEDS_DIR': paths.operational_dirs[7],
-        'CONFIG_DIR': paths.config_dir, 'WORKERS_CONFIG_PATH': paths.workers_config_path,
-        'UI_DIR': paths.static_root,
-    }))
-    return paths
-
-
-def initialize_runtime(paths: RuntimePaths | None = None) -> RuntimePaths:
-    if paths is None:
-        env = os.environ
-        paths = resolve_runtime_paths(env=env)
-        using_legacy_default = not env.get('OPS_DASHBOARD_RUNTIME_ROOT') and not env.get('OPS_DASHBOARD_STATIC_ROOT')
-    else:
-        using_legacy_default = False
-    paths = configure_runtime(paths, _allow_legacy_default=using_legacy_default)
-    for directory in (*paths.operational_dirs, paths.config_dir):
-        directory.mkdir(parents=True, exist_ok=True)
-    if not paths.workers_config_path.exists():
-        paths.workers_config_path.write_text(json.dumps(DEFAULT_WORKERS, ensure_ascii=False, indent=2), encoding='utf-8')
-    return paths
-
-
-BASE_DIR = CANONICAL_ROOT
+BASE_DIR = Path('/home/raphael/myproject')
 OPERATIONS_DIR = BASE_DIR / 'operations'
 BRIEFS_DIR = OPERATIONS_DIR / 'briefs'
 RESULTS_DIR = OPERATIONS_DIR / 'results'
@@ -214,12 +33,17 @@ DISPATCHES_DIR = OPERATIONS_DIR / 'dispatches'
 INPUTS_DIR = OPERATIONS_DIR / 'inputs'
 INTERVIEWS_DIR = OPERATIONS_DIR / 'interviews'
 SEEDS_DIR = OPERATIONS_DIR / 'seeds'
+FOLLOWUP_REQUESTS_DIR = OPERATIONS_DIR / 'follow-up-requests'
+INSTRUCTIONS_DIR = OPERATIONS_DIR / 'instructions'
 CONFIG_DIR = OPERATIONS_DIR / 'config'
 WORKERS_CONFIG_PATH = CONFIG_DIR / 'workers.json'
-UI_DIR = CANONICAL_STATIC_ROOT
+UI_DIR = BASE_DIR / 'operations_dashboard'
 PROFILES_DIR = Path('/home/raphael/.hermes/profiles')
 HOST = os.environ.get('OPS_DASHBOARD_HOST', '127.0.0.1')
 PORT = int(os.environ.get('OPS_DASHBOARD_PORT', '8765'))
+
+for d in [BRIEFS_DIR, RESULTS_DIR, VERIFICATIONS_DIR, DIGESTS_DIR, DISPATCHES_DIR, INPUTS_DIR, INTERVIEWS_DIR, SEEDS_DIR, FOLLOWUP_REQUESTS_DIR, INSTRUCTIONS_DIR, CONFIG_DIR, UI_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_WORKERS = {
     'Claude Code Worker': {
@@ -249,8 +73,22 @@ DEFAULT_WORKERS = {
     },
 }
 
+if not WORKERS_CONFIG_PATH.exists():
+    WORKERS_CONFIG_PATH.write_text(json.dumps(DEFAULT_WORKERS, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
 def now_iso() -> str:
     return datetime.now().isoformat(timespec='seconds')
+
+
+def write_all(stream, body: bytes) -> None:
+    """Write a complete HTTP body even when the socket accepts a partial write."""
+    remaining = memoryview(body)
+    while remaining:
+        written = stream.write(remaining)
+        if not written:
+            raise ConnectionError('HTTP response stream stopped accepting data')
+        remaining = remaining[written:]
 
 
 def slugify(text: str) -> str:
@@ -312,12 +150,22 @@ def list_items(folder: Path) -> list[dict]:
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding='utf-8'))
 
+
+def read_json_file(path: Path, default: dict) -> dict:
+    try:
+        value = load_json(path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
+        return default
+    return value if isinstance(value, dict) else default
+
+
 def read_observational_json_file(path: Path) -> dict:
+    """Keep malformed sync/watchdog snapshots visible to the read-only projection."""
     try:
         value = load_json(path)
     except FileNotFoundError:
         return {}
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+    except (OSError, json.JSONDecodeError, TypeError):
         return {'_malformed_snapshot': True}
     return value if isinstance(value, dict) else {'_malformed_snapshot': True}
 
@@ -839,8 +687,9 @@ def task_related_files(task_id: str, directory: Path) -> list[dict]:
 
 def result_metadata(task_id: str, files: list[dict]) -> list[dict]:
     """Expose only safe correlation fields from result JSON sidecars."""
-    safe = {'task_id', 'worker', 'worker_name', 'status', 'verdict', 'report_file', 'stage', 'stage_id',
-            'artifact_id', 'artifact_version', 'attempt_id', 'result_artifact_id', 'result_version'}
+    safe = {'task_id', 'worker', 'worker_name', 'worker_key', 'status', 'verdict', 'report_file', 'stage', 'stage_id',
+            'artifact_id', 'artifact_version', 'attempt_id', 'result_artifact_id', 'result_version',
+            'artifact_schema_version', 'artifact_manifest', 'target_artifact'}
     output = []
     for item in files:
         if not item.get('name', '').lower().endswith('.json'):
@@ -935,6 +784,7 @@ def build_task_view(task: dict) -> dict:
         'execution_mode': task.get('execution_mode', 'primary+review'),
         'assigned_workers': task.get('assigned_workers', []),
         'reviewer': task.get('reviewer', 'HermesVerifier'),
+        'project_ref': deepcopy(task.get('project_ref')) if isinstance(task.get('project_ref'), dict) else None,
         'status': task.get('status', 'queued'),
         'created_at': task.get('created_at'),
         'updated_at': task.get('updated_at', task.get('created_at')),
@@ -976,7 +826,8 @@ def build_task_view(task: dict) -> dict:
 def build_dashboard_console() -> dict:
     """Build all v2 panes from one task load; pane failures stay isolated."""
     tasks = [build_task_view(t) for t in load_tasks()]
-    return project_console_snapshot(tasks, availability=worker_status_map())
+    return project_console_snapshot(tasks, instruction_records=list_instructions(INSTRUCTIONS_DIR),
+                                    availability=worker_status_map())
 
 
 def build_agent_summary(tasks: list[dict]) -> list[dict]:
@@ -1160,7 +1011,13 @@ def build_overview() -> dict:
         'status_counts': status_counts,
         'workers': worker_status_map(),
         'agents': build_agent_summary(tasks),
-        'operations_evidence': {'schema_version': 1, 'sync': project_operations_evidence({}, sync_evidence, None)['sync'], 'watchdog': project_operations_evidence({}, None, watchdog_evidence)['watchdog']},
+        'sync_evidence': sync_evidence,
+        'watchdog_evidence': watchdog_evidence,
+        'operations_evidence': {
+            'schema_version': 1,
+            'sync': project_operations_evidence({}, sync_evidence, None)['sync'],
+            'watchdog': project_operations_evidence({}, None, watchdog_evidence)['watchdog'],
+        },
         'dashboard_summary': build_dashboard_summary(tasks),
     }
 
@@ -1182,6 +1039,12 @@ def write_task_brief(payload: dict) -> dict:
     constraints = (payload.get('constraints') or '').strip()
     deliverable = (payload.get('deliverable') or '').strip()
     reviewer = (payload.get('reviewer') or 'HermesVerifier').strip()
+    raw_project_ref = payload.get('project_ref')
+    project_ref = None
+    if isinstance(raw_project_ref, dict) and str(raw_project_ref.get('project_id') or '').strip():
+        project_ref = {'project_id': str(raw_project_ref['project_id']).strip()}
+        if str(raw_project_ref.get('name') or '').strip():
+            project_ref['name'] = str(raw_project_ref['name']).strip()[:240]
     if not assigned_workers:
         assigned_workers = ['HermesResearcher', 'researcher-co', 'researcher_agent']
     raw_conv = payload.get('pm_conversation') or []
@@ -1223,6 +1086,7 @@ def write_task_brief(payload: dict) -> dict:
         'execution_mode': execution_mode,
         'assigned_workers': assigned_workers,
         'reviewer': reviewer,
+        'project_ref': project_ref,
         'context': context,
         'constraints': constraints,
         'deliverable': deliverable,
@@ -1520,6 +1384,14 @@ def approve_task_seed(task_id: str, approver: str = 'Raphael') -> dict:
     return task['seed']
 
 
+def _task_exists(task_id: str) -> bool:
+    try:
+        find_task(task_id)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict | list, status: int = 200):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -1527,7 +1399,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        write_all(self.wfile, body)
 
     def _send_text(self, text: str, status: int = 200, content_type: str = 'text/plain; charset=utf-8'):
         body = text.encode('utf-8')
@@ -1535,7 +1407,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        write_all(self.wfile, body)
+
+    def _followup_origin_allowed(self) -> bool:
+        """Write routes require an explicit same-origin browser request."""
+        origin = (self.headers.get('Origin') or '').strip()
+        host = (self.headers.get('Host') or '').strip()
+        if not origin or not host:
+            return False
+        parsed = urlparse(origin)
+        return parsed.scheme in {'http', 'https'} and parsed.netloc == host
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1544,6 +1425,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(build_overview())
         if path == '/api/dashboard-console':
             return self._send_json(build_dashboard_console())
+        if path == '/api/dashboard/instruction-capabilities':
+            return self._send_json(instruction_capabilities())
         if path == '/api/briefs':
             return self._send_json(list_items(BRIEFS_DIR))
         if path == '/api/results':
@@ -1562,6 +1445,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(build_agent_summary([build_task_view(t) for t in load_tasks()]))
         if path == '/api/workers':
             return self._send_json(load_workers())
+        if path == '/api/follow-up-request-capabilities':
+            return self._send_json(followup_capabilities())
+        match = re.fullmatch(r'/api/tasks/([^/]+)/follow-up-requests', path)
+        if match:
+            task_id = unquote(match.group(1))
+            if not _task_exists(task_id):
+                return self._send_json({'ok': False, 'error': f'task not found: {task_id}'}, status=404)
+            return self._send_json({'ok': True, 'requests': list_followup_requests(task_id, FOLLOWUP_REQUESTS_DIR)})
         if path == '/api/health':
             return self._send_json({'ok': True, 'host': HOST, 'port': PORT})
         if path == '/detail.html':
@@ -1605,7 +1496,7 @@ class Handler(BaseHTTPRequestHandler):
                             self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + url_quote(name))
                         self.send_header('Content-Length', str(len(body)))
                         self.end_headers()
-                        self.wfile.write(body)
+                        write_all(self.wfile, body)
                         return
             return self._send_text('Not Found', status=404)
         if path == '/' or path == '/index.html':
@@ -1627,10 +1518,47 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == '/api/upload-input':
                 return self._handle_upload_input(parsed, raw)
+            if parsed.path == '/api/dashboard/instructions':
+                if not self._followup_origin_allowed():
+                    return self._send_json({'ok': False, 'error': {'code': 'same_origin_required', 'message': 'same-origin Origin header required', 'retryable': False}}, status=403)
+                if 'application/json' not in ctype:
+                    return self._send_json({'ok': False, 'error': {'code': 'json_required', 'message': 'application/json content type required', 'retryable': False}}, status=415)
+                if length > 64 * 1024:
+                    return self._send_json({'ok': False, 'error': {'code': 'payload_too_large', 'message': 'instruction payload is too large', 'retryable': False}}, status=413)
+                if not instruction_capabilities().get('write_enabled'):
+                    return self._send_json({'ok': False, 'error': {'code': 'write_disabled', 'message': 'instruction write is disabled', 'retryable': False}}, status=403)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return self._send_json({'ok': False, 'error': {'code': 'invalid_json', 'message': 'valid JSON object required', 'retryable': False}}, status=400)
+                if not isinstance(payload, dict):
+                    return self._send_json({'ok': False, 'error': {'code': 'invalid_json', 'message': 'JSON object required', 'retryable': False}}, status=400)
+                record, created = submit_instruction(payload, self.headers.get('Idempotency-Key', ''), root=INSTRUCTIONS_DIR, task_exists=_task_exists)
+                return self._send_json({'ok': True, 'instruction': record, 'parent_changed': False}, status=201 if created else 200)
             if 'application/json' in ctype and raw:
                 payload = json.loads(raw.decode('utf-8'))
             else:
                 payload = {k: v[0] for k, v in parse_qs(raw.decode('utf-8')).items()}
+
+            followup_match = re.fullmatch(r'/api/tasks/([^/]+)/follow-up-requests', parsed.path)
+            if followup_match:
+                if not self._followup_origin_allowed():
+                    return self._send_json({'ok': False, 'error': 'same-origin Origin header required'}, status=403)
+                if 'application/json' not in ctype:
+                    return self._send_json({'ok': False, 'error': 'application/json content type required'}, status=415)
+                if length > 64 * 1024:
+                    return self._send_json({'ok': False, 'error': 'follow-up request payload is too large'}, status=413)
+                if not followup_capabilities().get('write_enabled'):
+                    return self._send_json({'ok': False, 'error': 'follow-up request write is disabled'}, status=503)
+                task_id = unquote(followup_match.group(1))
+                request, created = submit_followup_request(
+                    task_id,
+                    payload,
+                    self.headers.get('Idempotency-Key', ''),
+                    requests_dir=FOLLOWUP_REQUESTS_DIR,
+                    task_exists=_task_exists,
+                )
+                return self._send_json({'ok': True, 'request': request, 'parent_task_changed': False}, status=201 if created else 200)
 
             if parsed.path == '/api/tasks':
                 created = write_task_brief(payload)
@@ -1691,6 +1619,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = set_gate_override(task_id, stage_id, action)
                 return self._send_json({'ok': True, 'gate_override': result}, status=200)
             return self._send_json({'error': 'Not Found'}, status=404)
+        except FollowUpError as e:
+            return self._send_json({'ok': False, 'error': str(e)}, status=getattr(e, 'status', 400))
+        except InstructionError as e:
+            return self._send_json({'ok': False, 'error': {'code': getattr(e, 'code', 'invalid_instruction'), 'message': str(e), 'retryable': getattr(e, 'retryable', False)}}, status=getattr(e, 'status', 400))
         except FileNotFoundError as e:
             return self._send_json({'ok': False, 'error': f'task not found: {e}'}, status=404)
         except ValueError as e:
@@ -1723,7 +1655,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    initialize_runtime()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'Operations dashboard running on http://{HOST}:{PORT}')
     server.serve_forever()
