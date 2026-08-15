@@ -69,6 +69,14 @@ def _evidence_health(raw: Any, task: dict, *, kind: str, now: datetime | None = 
         return {**base, "state": "unknown", "source_limitation": "malformed_snapshot"}
     if not isinstance(raw, dict):
         return {**base, "state": "unknown", "source_limitation": "malformed_snapshot"}
+    if kind == "sync":
+        transition_key = next((key for key in ("task_transition_evidence", "transition_evidence", "status_updates")
+                               if key in raw), None)
+        if transition_key is not None and (raw[transition_key] is None or
+                                            not isinstance(raw[transition_key], (list, str, dict))):
+            return {**base, "state": "unknown", "source_limitation": "malformed_snapshot"}
+    if kind == "watchdog" and "active_tasks" in raw and not isinstance(raw["active_tasks"], list):
+        return {**base, "state": "unknown", "source_limitation": "malformed_snapshot"}
     observed_at = raw.get("observed_at")
     observed = _parse_timestamp(observed_at)
     if observed is None:
@@ -89,7 +97,9 @@ def _evidence_health(raw: Any, task: dict, *, kind: str, now: datetime | None = 
     limitation = "snapshot_older_than_task_raw" if older_than_task else ("freshness_threshold_exceeded" if age > threshold else None)
     transitions = []
     if kind == "sync":
-        values = raw.get("task_transition_evidence") or raw.get("transition_evidence") or raw.get("status_updates") or []
+        transition_key = next((key for key in ("task_transition_evidence", "transition_evidence", "status_updates")
+                               if key in raw), None)
+        values = raw.get(transition_key) if transition_key is not None else []
         if isinstance(values, (str, dict)):
             values = [values]
         for value in values:
@@ -102,7 +112,8 @@ def _evidence_health(raw: Any, task: dict, *, kind: str, now: datetime | None = 
         result["last_result"] = raw.get("last_result")
         result["pull_exit"] = raw.get("pull_exit")
     if kind == "watchdog":
-        result["active_task"] = next((deepcopy(item) for item in raw.get("active_tasks", [])
+        active_tasks = raw.get("active_tasks", [])
+        result["active_task"] = next((deepcopy(item) for item in active_tasks
                                        if isinstance(item, dict) and item.get("task_id") == task.get("task_id")), None)
         if not result["active_task"]:
             result["source_limitation"] = result["source_limitation"] or "task_not_in_snapshot"

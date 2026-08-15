@@ -81,6 +81,56 @@ class DashboardProjectionTests(unittest.TestCase):
         )
         self.assertEqual(evidence["sync"]["task_transition_evidence"], [])
 
+    def assert_malformed_evidence_is_observational(self, task, *, sync=None, watchdog=None, side):
+        original_task = copy.deepcopy(task)
+        original_sync = copy.deepcopy(sync)
+        original_watchdog = copy.deepcopy(watchdog)
+        evidence = project_operations_evidence(task, sync, watchdog)
+
+        self.assertEqual(evidence[side]["state"], "unknown")
+        self.assertEqual(evidence[side]["source_limitation"], "malformed_snapshot")
+        if side == "sync":
+            self.assertEqual(evidence["sync"]["task_transition_evidence"], [])
+        else:
+            self.assertNotIn("active_task", evidence["watchdog"])
+        self.assertEqual(task, original_task)
+        self.assertEqual(sync, original_sync)
+        self.assertEqual(watchdog, original_watchdog)
+
+        projected = project_task({**task, "operations_evidence": evidence})
+        self.assertEqual(projected["task_card"]["status"], task["status"])
+        self.assertFalse(projected["authority_summary"]["effective_final_approved"])
+        self.assertNotEqual(projected["verification_summary"]["state"], "verified")
+        self.assertNotEqual(projected["final_deliverable"]["state"], "confirmed")
+        self.assertEqual(task, original_task)
+        self.assertEqual(sync, original_sync)
+        self.assertEqual(watchdog, original_watchdog)
+
+    def test_operations_evidence_scalar_transition_shape_is_fail_closed(self):
+        task = self.task(task_id="T-1")
+        sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success",
+                "status_updates": 7}
+        self.assert_malformed_evidence_is_observational(task, sync=sync, side="sync")
+
+    def test_operations_evidence_falsey_transition_scalars_are_fail_closed(self):
+        task = self.task(task_id="T-1")
+        for scalar in (0, False):
+            sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success",
+                    "status_updates": scalar}
+            self.assert_malformed_evidence_is_observational(task, sync=sync, side="sync")
+
+    def test_operations_evidence_null_status_updates_is_fail_closed(self):
+        task = self.task(task_id="T-1")
+        sync = {"observed_at": "2026-07-21T10:01:00+00:00", "last_result": "success",
+                "status_updates": None}
+        self.assert_malformed_evidence_is_observational(task, sync=sync, side="sync")
+
+    def test_operations_evidence_null_or_scalar_active_tasks_is_fail_closed(self):
+        task = self.task(task_id="T-1")
+        for active_tasks in (None, 7, 0, False):
+            watchdog = {"observed_at": "2026-07-21T10:01:00+00:00", "active_tasks": active_tasks}
+            self.assert_malformed_evidence_is_observational(task, watchdog=watchdog, side="watchdog")
+
     def progress_task(self, **overrides):
         task = {
             "task_id": "T-PROGRESS",
