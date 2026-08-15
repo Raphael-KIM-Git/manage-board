@@ -118,3 +118,49 @@ PASS — isolated fixture returned `{"ok": true, "host": "127.0.0.1", "port": 18
 ## Retest recommendation
 
 No retest is required for this gate. If the dashboard UI or responsive CSS changes, rerun the same isolated fixture matrix and compare the four evidence screenshots; do not use this evidence as an operational deployment or write-path verification.
+
+## Deployed-target browser retest — 2026-08-02
+
+### Verdict
+
+**NEEDS_RETEST for the configured Playwright browser gate; direct Chromium/CDP acceptance is otherwise PASS for the exercised read-only paths.** The configured browser tool could not load the deployed target: `browser_navigate("http://100.113.23.118:8765/")` failed before page load with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc0 in position 49`. A local Chrome for Testing 151.0.7922.34 process connected through CDP was used as a documented fallback; it rendered the same service at `http://127.0.0.1:8765/` and produced the evidence below.
+
+### Baseline and safety
+
+- Requested baseline: `deaf80c8c4f2a14ade6bf442a981c91620bb6a13`.
+- Actual worktree and `origin/main` at retest: `26b3fa476462c1eef5df70b2594a1e8a75f548c1` (not the requested baseline); this limitation is recorded rather than treated as baseline-equivalent.
+- Service health: `GET http://127.0.0.1:8765/api/health` returned HTTP 200, `{"ok": true, "host": "0.0.0.0", "port": 8765}`.
+- Browser CDP request log contained only `GET` requests for the document, static assets, read-only API endpoints, and `GET /api/tasks/T-20260729-001/follow-up-requests`; no POST/PUT/PATCH/DELETE request was observed.
+- No production application code or operational data was changed. Three screenshot files were added under `docs/qa/evidence/`.
+
+### Browser commands/actions and evidence
+
+- Browser executable: `~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome` (`Google Chrome for Testing 151.0.7922.34`).
+- Browser command: `CHROME="$HOME/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"; "$CHROME" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=9222 --user-data-dir=<temporary-profile> about:blank`.
+- CDP actions: enable Runtime/Log/Page/Network; set viewport metrics to `1440x1000`, `1024x1000`, and `390x844`; navigate to `http://127.0.0.1:8765/`; wait for `document.readyState === "complete"`; evaluate section positions/labels, `scrollWidth > innerWidth`, Agent Stage text presence, and visible button heights; capture full-page PNG; click the first visible safe `상세 보기` button; verify one task-detail modal becomes `aria-hidden="false"`; dispatch Escape; verify it returns to `aria-hidden="true"` and modal lock count `0`.
+- Screenshots (exact paths):
+  - `docs/qa/evidence/deployed-desktop-20260802.png` — 2,699,581 bytes (1440x1000 viewport; full-page capture).
+  - `docs/qa/evidence/deployed-tablet-20260802.png` — 1,562,610 bytes (1024x1000 viewport; full-page capture).
+  - `docs/qa/evidence/deployed-compact-20260802.png` — 1,393,985 bytes (390x844 viewport; full-page capture).
+- CDP console findings: `console []`; `errors []` (no console API messages, runtime exceptions, or Log errors in the final run).
+
+### Acceptance matrix
+
+| Criterion | Result | Evidence / limitation |
+|---|---|---|
+| Desktop section order Decision Queue → Active Work → Reviewable Artifacts → Recent Audit | PASS (CDP fallback) | DOM top positions were `431.02 < 3655.41 < 14213.11 < 15065.34`; labels matched the required order. |
+| Desktop Agent Stage absent | PASS (CDP fallback) | `document.body.innerText.includes("Agent Stage")` returned `false`. |
+| Desktop console errors | PASS (CDP fallback) | `console []`, `errors []`. Configured browser tool itself remains unavailable. |
+| Tablet same hierarchy | PASS (CDP fallback) | DOM top positions were `500.75 < 3725.14 < 14345.95 < 15784.03`; labels matched. |
+| Tablet no horizontal overflow | PASS (CDP fallback) | `innerWidth=1024`, `scrollWidth=1009`; overflow predicate `false`. |
+| Compact queue-first ordering | PASS (CDP fallback) | DOM top positions were `901.41 < 5655.80 < 17066.61 < 18846.69`; Decision Queue was first among required sections. |
+| Compact cards readable / target intent | PASS (CDP fallback) | 24 task cards rendered; visible action buttons measured 44px minimum (hero controls 45px). Screenshot confirms single-column cards. |
+| Compact Agent Stage absent | PASS (CDP fallback) | Agent Stage text predicate returned `false`. |
+| Safe detail open and Escape close | PASS (CDP fallback) | `상세 보기` opened `taskDetailModal` (`aria-hidden=false`, lock count 1); Escape closed it (`aria-hidden=true`, lock count 0). |
+| No write controls activated | PASS | Only GET requests were observed in the CDP request log. |
+| Configured Playwright MCP/browser tool | NEEDS_RETEST | `browser_navigate` failed before page load with the UTF-8 decode error; no screenshot or target console result was available from that tool. |
+| Requested commit baseline | NEEDS_RETEST | Actual HEAD/origin is `26b3fa4`, not requested `deaf80c8`; rerun against the specified commit or revise the baseline explicitly. |
+
+### Gate decision
+
+**Phase 1 browser gate cannot close as a configured-tool/baseline-compliant PASS.** The direct Chromium/CDP fallback demonstrates the responsive/read-only behavior on the currently served revision, but a final closure requires a working configured Playwright browser session and confirmation that the deployed service corresponds to the requested `deaf80c8` baseline (or an explicit baseline update).
