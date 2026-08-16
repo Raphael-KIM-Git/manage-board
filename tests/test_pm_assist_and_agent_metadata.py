@@ -144,6 +144,25 @@ class AgentMetadataTests(unittest.TestCase):
             )
             self.assertEqual(server.safe_profile_metadata(root), {})
 
+    def test_profile_metadata_ignores_indented_declarations_later_in_the_file(self):
+        """Real Hermes profiles declare the active model at the top, then reuse
+        `model:`/`provider:` keys inside unrelated nested blocks. Only the
+        top-level declaration may win."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.yaml").write_text(
+                "model:\n  default: gpt-5.6-terra\n  provider: openai-codex\n"
+                "  base_url: https://chatgpt.com/backend-api/codex\n"
+                "fallback_providers: []\n"
+                "browser:\n  provider: local\n"
+                "x_search:\n  model: grok-4.20-reasoning\n  timeout_seconds: 180\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                server.safe_profile_metadata(root),
+                {"model": "gpt-5.6-terra", "provider": "openai-codex"},
+            )
+
     def test_local_profile_registry_exposes_safe_labels_for_configured_profiles(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

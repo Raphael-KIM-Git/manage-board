@@ -563,7 +563,9 @@ def safe_profile_metadata(profile_dir: Path) -> dict[str, str]:
                         continue
             match = re.match(
                 r'^\s*(?:default|provider)\s*:\s*([^#]+?)\s*$' if nested_model else
-                r'^\s*(model|provider)\s*:\s*([^#]+?)\s*$',
+                # Top-level only: nested blocks elsewhere in the file reuse
+                # these key names and must never override the active label.
+                r'^(model|provider)\s*:\s*([^#]+?)\s*$',
                 line,
             )
             if not match:
