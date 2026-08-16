@@ -1158,7 +1158,8 @@ function renderConsoleSnapshot(snapshot) {
       const state = states[0]?.state || (agent.dispatch?.[0]?.state === 'dispatched' ? 'dispatch_confirmed' : 'unknown');
       row.append(el('div', 'console-row-title', agent.name || agent.agent_id));
       row.append(el('span', `console-status-badge console-${state}`, consoleStateLabel(state)));
-      row.append(el('span', 'console-row-meta', `현재 ${agent.active_count || 0} · 결과 ${agent.completed_count || 0} · 검토 ${agent.review_count || 0}`));
+      const metadata = [agent.role, agent.model && `model ${agent.model}`, agent.provider && `provider ${agent.provider}`].filter(Boolean).join(' · ');
+      row.append(el('span', 'console-row-meta', metadata || `현재 ${agent.active_count || 0} · 결과 ${agent.completed_count || 0} · 검토 ${agent.review_count || 0}`));
       if (agent.task_ids?.[0]) row.append(consoleRowButton('업무 상세', agent.task_ids[0]));
       agentRoot.append(row);
     });

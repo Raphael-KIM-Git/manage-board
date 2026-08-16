@@ -39,10 +39,10 @@
 .pane-kicker { margin: 0 0 7px; color: var(--muted); font-size: 11px; font-weight: 850; letter-spacing: .1em; }
 .console-pane-body { min-height: 0; flex: 1; display: grid; align-content: start; gap: 9px; padding-top: 12px; overflow: auto; }
 .console-summary-strip { padding: 9px 11px; border-radius: 10px; color: var(--muted); background: var(--panel-soft); font-size: 12px; line-height: 1.45; }
-.console-row { min-width: 0; display: grid; gap: 5px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 13px; background: rgba(255,255,255,.72); }
+.console-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 8px; min-height: 44px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 13px; background: rgba(255,255,255,.72); }
 .console-row-title { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
 .console-row-meta { color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.console-row-action { justify-self: start; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--panel); cursor: pointer; font-size: 11px; font-weight: 750; }
+.console-row-action { grid-column: 3; grid-row: 1 / span 2; justify-self: end; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--panel); cursor: pointer; font-size: 11px; font-weight: 750; }
 .console-composer-entry { justify-self: start; margin-top: auto; }
 .console-status-badge { justify-self: start; padding: 4px 8px; border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: 10px; font-weight: 850; letter-spacing: .03em; }
 .console-result_received { color: var(--success); background: var(--success-soft); }
@@ -920,6 +920,9 @@ textarea { resize: vertical; min-height: 110px; }
   .console-pane { min-height: 390px; padding: 16px; border-radius: 22px; }
   .pane-mission { min-height: 440px; }
   .console-row { padding: 10px; }
+  .agent-row { grid-template-columns: 1fr; }
+  .agent-row .console-status-badge,
+  .agent-row .console-row-action { grid-column: 1; grid-row: auto; justify-self: start; }
 }
 
 /* Keep review essentials visible; lower-priority raw context remains disclosure-based. */

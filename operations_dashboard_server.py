@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from copy import deepcopy
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -302,9 +303,17 @@ def pm_brief_assist_heuristic(payload: dict) -> dict:
     }
 
 
-PM_AGENT_NAME = os.environ.get('OPS_PM_AGENT', 'HermesPM')
-PM_CLAUDE_BIN = os.environ.get('OPS_PM_CLAUDE_BIN', '/home/raphael/.local/bin/claude')
-PM_LLM_TIMEOUT = int(os.environ.get('OPS_PM_TIMEOUT', '150'))
+PM_AGENT_NAME = 'HermesPM'
+PM_HERMES_PYTHON = os.environ.get(
+    'OPS_PM_HERMES_PYTHON', '/home/raphael/.hermes/hermes-agent/venv/bin/python3'
+)
+PM_HERMES_HELPER = Path(__file__).with_name('operations_dashboard_pm_assist.py')
+PM_HERMES_MODEL = 'gpt-5.6-terra'
+PM_HERMES_PROVIDER = 'openai-codex'
+PM_LLM_TIMEOUT = min(int(os.environ.get('OPS_PM_TIMEOUT', '45')), 60)
+PM_CIRCUIT_FAILURE_LIMIT = 3
+_pm_circuit_failures = 0
+_pm_circuit_opened_at = 0.0
 
 
 def pm_llm_extract_json(text: str) -> dict:
@@ -355,6 +364,30 @@ def pm_llm_build_prompt(turns: list[str], draft: dict, remote_workers: list[str]
 - interpretation은 매 턴 갱신한다. 모호한 용어를 임의로 해석했다면 reply에서도 사용자에게 그 해석이 맞는지 확인한다.'''
 
 
+def _pm_safe_environment() -> dict[str, str]:
+    allowed = {'PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'HERMES_HOME'}
+    return {key: value for key, value in os.environ.items() if key in allowed}
+
+
+def pm_brief_assist_hermes(payload: dict, *, prompt: str) -> dict:
+    """Run one isolated Hermes turn in Hermes' own Python runtime."""
+    envelope = json.dumps({'prompt': prompt[:24000], 'source': 'dashboard-pm-assist'}, ensure_ascii=False)
+    code, output, _ = run_command(
+        [PM_HERMES_PYTHON, str(PM_HERMES_HELPER)],
+        timeout=PM_LLM_TIMEOUT,
+        cwd=str(PM_HERMES_HELPER.parent),
+        input_text=envelope,
+        env=_pm_safe_environment(),
+    )
+    if code != 0:
+        raise RuntimeError('Hermes helper failed')
+    output = output.strip()
+    if len(output) > 50000:
+        raise RuntimeError('Hermes helper response exceeded limit')
+    parsed = pm_llm_extract_json(output)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def pm_brief_assist_llm(payload: dict) -> dict:
     message = (payload.get('message') or '').strip()
     conversation = payload.get('conversation') or []
@@ -373,14 +406,7 @@ def pm_brief_assist_llm(payload: dict) -> dict:
         turns.append(f'Raphael: {message}')
 
     prompt = pm_llm_build_prompt(turns, draft, remote_workers, reviewer)
-    code, out, err = run_command(
-        [PM_CLAUDE_BIN, '-p', '--agent', PM_AGENT_NAME, prompt],
-        timeout=PM_LLM_TIMEOUT,
-        cwd='/home/raphael',
-    )
-    if code != 0:
-        raise RuntimeError(f'claude exit {code}: {(err or out).strip()[:300]}')
-    parsed = pm_llm_extract_json(out)
+    parsed = pm_brief_assist_hermes(payload, prompt=prompt)
 
     title = str(parsed.get('title') or '').strip() or (draft.get('title') or '').strip()
     objective = str(parsed.get('objective') or '').strip() or (draft.get('objective') or '').strip()
@@ -425,12 +451,22 @@ def pm_brief_assist_llm(payload: dict) -> dict:
 
 
 def pm_brief_assist(payload: dict) -> dict:
-    try:
-        return pm_brief_assist_llm(payload)
-    except Exception as exc:
+    global _pm_circuit_failures, _pm_circuit_opened_at
+    if _pm_circuit_failures >= PM_CIRCUIT_FAILURE_LIMIT and time.monotonic() - _pm_circuit_opened_at < 60:
         result = pm_brief_assist_heuristic(payload)
         result['engine'] = 'heuristic-fallback'
-        result['reply'] = f'(HermesPM LLM 호출 실패로 규칙 기반 임시 처리: {str(exc)[:160]})\n{result["reply"]}'
+        result['reply'] = '(HermesPM 보조 경로가 잠시 열리지 않아 규칙 기반으로 처리했습니다.)\n' + result['reply']
+        return result
+    try:
+        result = pm_brief_assist_llm(payload)
+        _pm_circuit_failures = 0
+        return result
+    except Exception:
+        _pm_circuit_failures += 1
+        _pm_circuit_opened_at = time.monotonic()
+        result = pm_brief_assist_heuristic(payload)
+        result['engine'] = 'heuristic-fallback'
+        result['reply'] = '(HermesPM 보조 경로 실패로 규칙 기반 임시 처리)\n' + result['reply']
         return result
 
 
@@ -490,8 +526,28 @@ def profile_agent_map() -> dict[str, dict]:
         out[display_name] = {
             'profile_slug': profile_slug,
             'description': description or 'Hermes profile agent',
+            **safe_profile_metadata(profile_dir),
         }
     return out
+
+
+def safe_profile_metadata(profile_dir: Path) -> dict[str, str]:
+    """Read only scalar model/provider labels; never expose raw config."""
+    path = profile_dir / 'config.yaml'
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding='utf-8').splitlines():
+            match = re.match(r'^\s*(model|provider)\s*:\s*([^#]+?)\s*$', line)
+            if not match:
+                continue
+            value = match.group(2).strip().strip('"\'')
+            if value and re.fullmatch(r'[A-Za-z0-9._/-]{1,80}', value):
+                values[match.group(1)] = value
+    except (OSError, UnicodeError):
+        return {}
+    return values
 
 
 def task_json_paths() -> list[Path]:
@@ -828,10 +884,13 @@ def build_dashboard_console() -> dict:
     """Build all v2 panes from one task load; pane failures stay isolated."""
     tasks = [build_task_view(t) for t in load_tasks()]
     availability = worker_status_map()
-    registry = {name: 'configured' for name in profile_agent_map()}
+    profile_agents = profile_agent_map()
+    registry = {name: 'configured' for name in profile_agents}
     registry.update(availability)
     return project_console_snapshot(tasks, instruction_records=list_instructions(INSTRUCTIONS_DIR),
-                                    availability=availability, agent_registry=registry)
+                                    availability=availability, agent_registry=registry,
+                                    agent_metadata={name: {key: value for key, value in data.items() if key in {'model', 'provider'}}
+                                                   for name, data in profile_agents.items()})
 
 
 def build_agent_summary(tasks: list[dict]) -> list[dict]:
@@ -1114,8 +1173,10 @@ def write_task_brief(payload: dict) -> dict:
     return data
 
 
-def run_command(cmd: list[str], timeout: int = 30, cwd: str | None = None) -> tuple[int, str, str]:
-    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, cwd=cwd)
+def run_command(cmd: list[str], timeout: int = 30, cwd: str | None = None,
+                input_text: str | None = None, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, cwd=cwd,
+                          input=input_text, env=env, shell=False)
     return proc.returncode, proc.stdout, proc.stderr
 
 

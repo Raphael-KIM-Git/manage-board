@@ -33,9 +33,11 @@ def _project_ref(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, Any]], availability: dict[str, Any] | None,
-                agent_registry: dict[str, Any] | list[str] | None = None) -> list[dict[str, Any]]:
+                agent_registry: dict[str, Any] | list[str] | None = None,
+                agent_metadata: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     availability = availability or {}
+    agent_metadata = agent_metadata or {}
     if isinstance(agent_registry, dict):
         registry_names = set(agent_registry)
     else:
@@ -51,7 +53,10 @@ def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, An
 
     def ensure(agent: str) -> dict[str, Any]:
         agent = str(agent)
-        return rows.setdefault(agent, {"agent_id": agent, "name": agent,
+        metadata = agent_metadata.get(agent) if isinstance(agent_metadata.get(agent), dict) else {}
+        safe_metadata = {key: str(metadata[key]) for key in ("model", "provider")
+                         if isinstance(metadata.get(key), str) and metadata[key].strip()}
+        return rows.setdefault(agent, {"agent_id": agent, "name": agent, **safe_metadata,
                                         "availability": availability.get(agent, "unknown"),
                                         "configuration_state": configuration_state(agent),
                                         "dispatch_state": "not_dispatched", "execution_state": "idle",
@@ -149,6 +154,7 @@ def _safe_pane(name: str, factory: Callable[[], Any], limitations: list[str]) ->
 def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_records: list[dict[str, Any]] | None = None,
                              availability: dict[str, Any] | None = None,
                              agent_registry: dict[str, Any] | list[str] | None = None,
+                             agent_metadata: dict[str, dict[str, Any]] | None = None,
                              generated_at: str | None = None) -> dict[str, Any]:
     raw_tasks = deepcopy(task_views or [])
     limitations: list[str] = []
@@ -167,7 +173,7 @@ def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_re
     instructions = [deepcopy(item) for item in (instruction_records or []) if isinstance(item, dict)]
     def pm_pane():
         return {"state": "ready", "current_context": {"target_type": "none", "target_id": None, "target_raw_status": None}, "recent_instructions": instructions[:20]}
-    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability, agent_registry)}
+    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability, agent_registry, agent_metadata)}
     def projects_pane(): return {"state": "ready", "items": _project_rows(raw_tasks, projections)}
     def mission_pane():
         rows = []
