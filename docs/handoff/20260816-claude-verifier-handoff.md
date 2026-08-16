@@ -204,3 +204,61 @@ cp ~/.hermes/profiles/pm/SOUL.md.bak-20260816-loopfix ~/.hermes/profiles/pm/SOUL
 
 이전 보고에서 카드 총계를 158건으로 적었으나 **159건**이 정확합니다(합산 오류).
 2026-08-16 23:00 실측: done 146 / archived 11 / blocked 1 / triage 1.
+
+## 8. 테스트 산출물 전량 폐기 + Watchdog 방향 확정 (2026-08-17 00:00, Raphael 지시)
+
+### 8-1. 실행 전 실측 — "오늘 만든 파일"은 0건
+
+Raphael님 지시는 "오늘 만들어진 파일 외 전부 폐기"였으나, 실측 결과 `operations/` 안에 08-16 생성 산출물은 없었습니다. mtime은 전부 오늘이고 내용상 날짜는 7월이었습니다.
+
+- `operations/results/` 94건 — 내용 최신 2026-07-29
+- `operations/archive/` 318건 — 08-14 1건 외 전부 7월 이하
+
+### 8-2. mtime 갱신 원인
+
+프로세스 감시(0.4초 폴링, 5분)로 확정했습니다.
+
+```
+[23:55:05] bash -lc ... ensure-agent-hub-services.sh ...
+           flock -n /tmp/ops_sync.lock python3 operations_sync.py
+[23:55:06] scp -i ~/.ssh/id_ed25519 raphael@100.120.123.120:~/agent-hub/results/* \
+             /home/raphael/myproject/operations/results/
+```
+
+Windows 작업 스케줄러가 10분 주기로 `ensure-agent-hub-services.sh`(keepalive) + `operations_sync.py`를 실행합니다. `pull_results()`가 scp로 전량 덮어써 `changed=94`가 매번 기록됐습니다. **PC만 삭제하면 10분 뒤 복원되므로 Mac 원본을 먼저 삭제**했습니다.
+
+주의 — 이 스케줄러 작업은 대시보드·게이트웨이 keepalive를 겸합니다. **비활성화하면 안 됩니다.**
+
+### 8-3. 삭제 대상과 보존 대상
+
+| 구분 | 내용 |
+| --- | --- |
+| 삭제 | Mac `~/agent-hub/results/` 94건, PC `operations/results/` 94건 + `operations/archive/` 318건, `local-workspace/`·`inputs/`·`watchdog/three-hour-monitor-20260729.log` 4건 |
+| 보존 | git 추적 16건(`operations/kanban/*.py`, `config/`, `templates/`, `instructions/`, `README.md`), 런타임 상태(`sync/latest.json`, `watchdog/{state,latest}.json`, `worker-status.json`), `__pycache__` |
+| 보존(중요) | **칸반 DB 159건** — 08-18 카드 증식 루프 관찰 지표의 유일한 근거. 삭제 금지 |
+
+백업(24시간 보관 권장):
+- `/home/raphael/backups/20260816-operations-results-archive-pc.tar.gz` (686KB, 412건)
+- `/home/raphael/backups/20260816-operations-leftovers-pc.tar.gz`
+- Mac `~/backups/20260816-agent-hub-results-mac.tar.gz` (203KB, 94건)
+
+### 8-4. 검증
+
+- `operations/` 450건 → **34건** (3.7MB → 460KB)
+- `python3 -m unittest discover -s tests -q` → **125건 전부 통과**
+- `curl /api/health` → HTTP 200, `/api/results` → `[]`
+- 00:05 sync tick 통과 후 `results` **0건 유지** (재생성 없음)
+- `git status --porcelain` → 출력 없음 (추적 파일 무손상)
+
+부수 효과: sync가 `pull_exit=1 / scp: ~/agent-hub/results/*: No such file or directory`를 남깁니다. 원본이 빈 정상 상태이며 첫 신규 산출물이 생기면 해소됩니다. 로그 소음이 문제되면 Mac 쪽에 placeholder 1건을 두는 방법이 있으나, 대시보드 `result_count`가 1로 잡히므로 권장하지 않습니다.
+
+### 8-5. Watchdog 방향 확정
+
+| 갈래 | 결론 |
+| --- | --- |
+| `operations_watchdog.py` 주기 실행 | **폐기** — 감시 대상 `operations/briefs/`가 0건이고, 생성 경로(대시보드 dispatch)는 08-14 이후 미사용. 코드는 테스트(125건에 포함)와 함께 저장소에 남기고 실행만 하지 않습니다 |
+| `~/.hermes/scripts/kanban_exception_monitor.py` 활성화 | **08-18까지 보류** — 이 스크립트는 `done` 전이를 알림으로 내보내며, 이는 7항에서 차단한 카드 증식 루프의 입력 신호와 같은 종류입니다. 루프 차단 지표 확인 전 활성화 금지 |
+
+관련 상태: hermes cron job `b66d8e47c5b4` (`PM 5-minute exception and heartbeat monitor`, `every 5m`) = `enabled: False`, `config.yaml: approvals.cron_mode = deny`. 활성화는 R3 사전 승인 대상입니다.
+
+HermesPM 유의: 08-18에 지표를 확인한 뒤 활성화 여부를 Raphael님께 확인하십시오. 절충안으로 `done` 알림을 제외하고 `blocked`/`failed`만 통지하도록 스크립트를 수정하면 루프 재개 없이 예외 감시를 회복할 수 있습니다.
