@@ -827,8 +827,11 @@ def build_task_view(task: dict) -> dict:
 def build_dashboard_console() -> dict:
     """Build all v2 panes from one task load; pane failures stay isolated."""
     tasks = [build_task_view(t) for t in load_tasks()]
+    availability = worker_status_map()
+    registry = {name: 'configured' for name in profile_agent_map()}
+    registry.update(availability)
     return project_console_snapshot(tasks, instruction_records=list_instructions(INSTRUCTIONS_DIR),
-                                    availability=worker_status_map())
+                                    availability=availability, agent_registry=registry)
 
 
 def build_agent_summary(tasks: list[dict]) -> list[dict]:

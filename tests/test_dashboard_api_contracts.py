@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import operations_dashboard_server as server
 
@@ -40,6 +41,17 @@ class DashboardAPIContractTests(unittest.TestCase):
         overview = server.build_overview()
         self.assertEqual(overview["dashboard_summary"]["schema_version"], 1)
         self.assertIn("status_counts", overview)
+
+    def test_dashboard_console_contract_keeps_registry_when_briefs_are_empty(self):
+        with patch.object(server, "load_tasks", return_value=[]), \
+             patch.object(server, "list_instructions", return_value=[]), \
+             patch.object(server, "profile_agent_map", return_value={"HermesPM": {"description": "PM"}}), \
+             patch.object(server, "worker_status_map", return_value={"Hermes Hub": "configured", "writer-co": "needs_config"}):
+            snapshot = server.build_dashboard_console()
+        rows = {row["agent_id"]: row for row in snapshot["panes"]["agents"]["items"]}
+        self.assertEqual(set(rows), {"HermesPM", "Hermes Hub", "writer-co"})
+        self.assertTrue(all(row["dispatch_state"] == "not_dispatched" for row in rows.values()))
+        self.assertTrue(all(row["active_count"] == 0 and row["completed_count"] == 0 for row in rows.values()))
 
     def test_gate_override_contract(self):
         result = server.set_gate_override("T-API-001", "writing", "revise")

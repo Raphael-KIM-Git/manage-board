@@ -30,6 +30,31 @@ class ConsoleV2Tests(unittest.TestCase):
         self.assertEqual(snapshot["panes"]["agents"]["items"][0]["results"][0]["state"], "dispatch_confirmed")
         self.assertEqual(snapshot["panes"]["projects"]["items"][0]["project_id"], "proj-a")
 
+    def test_registry_agents_are_visible_without_tasks(self):
+        snapshot = project_console_snapshot([], availability={"HermesPM": "configured", "writer-co": "needs_config"},
+                                            agent_registry={"HermesPM": "configured", "writer-co": "needs_config"},
+                                            generated_at="2026-07-31T10:01:00Z")
+        rows = {row["agent_id"]: row for row in snapshot["panes"]["agents"]["items"]}
+        self.assertEqual(set(rows), {"HermesPM", "writer-co"})
+        for row in rows.values():
+            self.assertEqual(row["dispatch_state"], "not_dispatched")
+            self.assertEqual(row["execution_state"], "idle")
+            self.assertEqual(row["active_count"], 0)
+            self.assertEqual(row["completed_count"], 0)
+        self.assertEqual(rows["HermesPM"]["configuration_state"], "configured")
+        self.assertEqual(rows["writer-co"]["configuration_state"], "needs_config")
+
+    def test_registry_rows_merge_task_evidence_precedence(self):
+        task = self.task()
+        task["stages"][0]["agents"] = ["writer-co"]
+        task["dashboard_projection"] = {"progress": {"agent_states": {"writing": {"writer-co": "result_received", "_dispatch": {"writer-co": "dispatch_confirmed"}}}}}
+        snapshot = project_console_snapshot([task], availability={"writer-co": "configured"}, agent_registry=["writer-co"])
+        row = snapshot["panes"]["agents"]["items"][0]
+        self.assertEqual(row["dispatch_state"], "dispatch_confirmed")
+        self.assertEqual(row["execution_state"], "result_received")
+        self.assertEqual(row["completed_count"], 1)
+        self.assertEqual(row["active_count"], 0)
+
     def test_project_identity_is_explicit_and_missing_is_unassigned(self):
         snapshot = project_console_snapshot([self.task(task_id="T-A"), self.task(task_id="T-B", title="Project A lookalike", project_ref=None)])
         projects = {row["project_id"]: row for row in snapshot["panes"]["projects"]["items"]}

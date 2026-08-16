@@ -32,11 +32,38 @@ def _project_ref(task: dict[str, Any]) -> dict[str, Any]:
     return {"project_id": project_id, "name": str(ref.get("name") or project_id), "bound": True, "source": "task.project_ref"}
 
 
-def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, Any]], availability: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, Any]], availability: dict[str, Any] | None,
+                agent_registry: dict[str, Any] | list[str] | None = None) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     availability = availability or {}
+    if isinstance(agent_registry, dict):
+        registry_names = set(agent_registry)
+    else:
+        registry_names = set(agent_registry or [])
+
+    def configuration_state(agent: str) -> str:
+        value = availability.get(agent)
+        if value == "needs_config":
+            return "needs_config"
+        if agent in registry_names or value is not None:
+            return "configured"
+        return "unknown"
+
     def ensure(agent: str) -> dict[str, Any]:
-        return rows.setdefault(str(agent), {"agent_id": str(agent), "name": str(agent), "availability": availability.get(agent, "unknown"), "active_count": 0, "review_count": 0, "blocked_count": 0, "completed_count": 0, "dispatch": [], "results": [], "latest_evidence_at": None, "task_ids": []})
+        agent = str(agent)
+        return rows.setdefault(agent, {"agent_id": agent, "name": agent,
+                                        "availability": availability.get(agent, "unknown"),
+                                        "configuration_state": configuration_state(agent),
+                                        "dispatch_state": "not_dispatched", "execution_state": "idle",
+                                        "active_count": 0, "review_count": 0, "blocked_count": 0,
+                                        "completed_count": 0, "dispatch": [], "results": [],
+                                        "latest_evidence_at": None, "task_ids": []})
+
+    # Registry identity is configuration evidence, not task execution evidence.
+    # Seed it before processing tasks so an empty brief directory remains honest.
+    for agent in registry_names:
+        ensure(str(agent))
+
     for task in tasks:
         task_id = str(task.get("task_id") or "")
         projection = projections.get(task_id) or {}
@@ -62,6 +89,10 @@ def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, An
                 dispatch_state = (state.get("_dispatch") or {}).get(agent)
                 row["dispatch"].append({"task_id": task_id, "stage_id": stage_id, "state": dispatch_state or "not_dispatched"})
                 row["results"].append({"task_id": task_id, "stage_id": stage_id, "state": worker_state})
+                if dispatch_state:
+                    row["dispatch_state"] = dispatch_state
+                if worker_state != "not_dispatched":
+                    row["execution_state"] = worker_state
                 if worker_state in {"failed_or_blocked"}:
                     row["blocked_count"] += 1
                 elif worker_state == "result_received":
@@ -116,7 +147,9 @@ def _safe_pane(name: str, factory: Callable[[], Any], limitations: list[str]) ->
 
 
 def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_records: list[dict[str, Any]] | None = None,
-                             availability: dict[str, Any] | None = None, generated_at: str | None = None) -> dict[str, Any]:
+                             availability: dict[str, Any] | None = None,
+                             agent_registry: dict[str, Any] | list[str] | None = None,
+                             generated_at: str | None = None) -> dict[str, Any]:
     raw_tasks = deepcopy(task_views or [])
     limitations: list[str] = []
     projections: dict[str, dict[str, Any]] = {}
@@ -134,7 +167,7 @@ def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_re
     instructions = [deepcopy(item) for item in (instruction_records or []) if isinstance(item, dict)]
     def pm_pane():
         return {"state": "ready", "current_context": {"target_type": "none", "target_id": None, "target_raw_status": None}, "recent_instructions": instructions[:20]}
-    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability)}
+    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability, agent_registry)}
     def projects_pane(): return {"state": "ready", "items": _project_rows(raw_tasks, projections)}
     def mission_pane():
         rows = []
