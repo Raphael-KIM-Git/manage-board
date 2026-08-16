@@ -115,12 +115,81 @@ class AgentMetadataTests(unittest.TestCase):
             metadata = server.safe_profile_metadata(root)
             self.assertEqual(metadata, {"model": "gpt-5.6-terra", "provider": "openai-codex"})
 
+    def test_profile_metadata_reads_nested_hermes_model_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.yaml").write_text(
+                "model:\n  default: gpt-5.6-luna\n  provider: openai-codex\n"
+                "  base_url: https://secret\napi_key: SECRET\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(server.safe_profile_metadata(root), {"model": "gpt-5.6-luna", "provider": "openai-codex"})
+
+    def test_profile_metadata_rejects_malformed_or_sensitive_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.yaml").write_text(
+                "model:\n  default: ../../secret\n  provider: openai codex\n"
+                "token: SECRET\nbase_url: https://secret\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(server.safe_profile_metadata(root), {})
+
+    def test_profile_metadata_rejects_nested_model_decoys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.yaml").write_text(
+                "model:\n  routing:\n    default: gpt-5.6-terra\n    provider: openai-codex\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(server.safe_profile_metadata(root), {})
+
+    def test_local_profile_registry_exposes_safe_labels_for_configured_profiles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configs = {
+                "pm": "gpt-5.6-terra",
+                "developer": "gpt-5.6-luna",
+                "qa": "gpt-5.6-luna",
+            }
+            for slug, model in configs.items():
+                profile = root / slug
+                profile.mkdir()
+                (profile / "profile.yaml").write_text(f"description: {slug}\n", encoding="utf-8")
+                (profile / "config.yaml").write_text(
+                    f"model:\n  default: {model}\n  provider: openai-codex\n",
+                    encoding="utf-8",
+                )
+            with patch.object(server, "PROFILES_DIR", root):
+                registry = server.profile_agent_map()
+            self.assertEqual(registry["HermesPM"]["model"], "gpt-5.6-terra")
+            self.assertEqual(registry["HermesDeveloper"]["provider"], "openai-codex")
+            self.assertEqual(registry["HermesQA"]["model"], "gpt-5.6-luna")
+
     def test_console_agent_rows_include_metadata_without_inventing_execution_state(self):
-        snapshot = project_console_snapshot([], agent_registry={"HermesPM": "configured"}, agent_metadata={"HermesPM": {"model": "gpt-5.6-terra", "provider": "openai-codex"}})
+        snapshot = project_console_snapshot(
+            [], agent_registry={"HermesPM": "configured"}, local_profile_agents={"HermesPM"},
+            agent_metadata={"HermesPM": {"model": "gpt-5.6-terra", "provider": "openai-codex"}},
+        )
         row = snapshot["panes"]["agents"]["items"][0]
         self.assertEqual(row["model"], "gpt-5.6-terra")
         self.assertEqual(row["provider"], "openai-codex")
         self.assertEqual(row["execution_state"], "idle")
+
+    def test_console_agent_rows_drop_untrusted_metadata_shapes(self):
+        snapshot = project_console_snapshot(
+            [], agent_registry={"remote-worker": "configured", "HermesQA": "configured"},
+            local_profile_agents={"HermesQA"},
+            agent_metadata={
+                "remote-worker": {"model": "gpt-5.6-terra"},
+                "HermesQA": {"model": "<script>", "provider": "openai-codex", "token": "SECRET"},
+            },
+        )
+        rows = {row["agent_id"]: row for row in snapshot["panes"]["agents"]["items"]}
+        self.assertNotIn("model", rows["remote-worker"])
+        self.assertNotIn("model", rows["HermesQA"])
+        self.assertEqual(rows["HermesQA"]["provider"], "openai-codex")
+        self.assertNotIn("token", rows["HermesQA"])
 
 
 if __name__ == "__main__":

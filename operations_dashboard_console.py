@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable
 import uuid
+import re
 
 from operations_dashboard_projection import project_task
 
@@ -22,6 +23,19 @@ def _status_quality(task: dict[str, Any]) -> str:
     return "known" if task.get("status") in known else "unknown"
 
 
+def _safe_agent_metadata(metadata: Any) -> dict[str, str]:
+    """Keep only bounded, display-safe labels supplied by the local registry."""
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: value.strip()
+        for key in ("model", "provider")
+        if isinstance(value := metadata.get(key), str)
+        and ".." not in value.strip()
+        and re.fullmatch(r"[A-Za-z0-9._/-]{1,80}", value.strip())
+    }
+
+
 def _project_ref(task: dict[str, Any]) -> dict[str, Any]:
     ref = task.get("project_ref")
     if not isinstance(ref, dict) or not ref.get("project_id"):
@@ -34,10 +48,12 @@ def _project_ref(task: dict[str, Any]) -> dict[str, Any]:
 
 def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, Any]], availability: dict[str, Any] | None,
                 agent_registry: dict[str, Any] | list[str] | None = None,
-                agent_metadata: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+                agent_metadata: dict[str, dict[str, Any]] | None = None,
+                local_profile_agents: set[str] | None = None) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     availability = availability or {}
     agent_metadata = agent_metadata or {}
+    local_profile_agents = local_profile_agents or set()
     if isinstance(agent_registry, dict):
         registry_names = set(agent_registry)
     else:
@@ -53,9 +69,9 @@ def _agent_rows(tasks: list[dict[str, Any]], projections: dict[str, dict[str, An
 
     def ensure(agent: str) -> dict[str, Any]:
         agent = str(agent)
-        metadata = agent_metadata.get(agent) if isinstance(agent_metadata.get(agent), dict) else {}
-        safe_metadata = {key: str(metadata[key]) for key in ("model", "provider")
-                         if isinstance(metadata.get(key), str) and metadata[key].strip()}
+        metadata = (agent_metadata.get(agent) if agent in local_profile_agents else {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        safe_metadata = _safe_agent_metadata(metadata)
         return rows.setdefault(agent, {"agent_id": agent, "name": agent, **safe_metadata,
                                         "availability": availability.get(agent, "unknown"),
                                         "configuration_state": configuration_state(agent),
@@ -155,6 +171,7 @@ def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_re
                              availability: dict[str, Any] | None = None,
                              agent_registry: dict[str, Any] | list[str] | None = None,
                              agent_metadata: dict[str, dict[str, Any]] | None = None,
+                             local_profile_agents: set[str] | None = None,
                              generated_at: str | None = None) -> dict[str, Any]:
     raw_tasks = deepcopy(task_views or [])
     limitations: list[str] = []
@@ -173,7 +190,7 @@ def project_console_snapshot(task_views: list[dict[str, Any]], *, instruction_re
     instructions = [deepcopy(item) for item in (instruction_records or []) if isinstance(item, dict)]
     def pm_pane():
         return {"state": "ready", "current_context": {"target_type": "none", "target_id": None, "target_raw_status": None}, "recent_instructions": instructions[:20]}
-    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability, agent_registry, agent_metadata)}
+    def agents_pane(): return {"state": "ready", "items": _agent_rows(raw_tasks, projections, availability, agent_registry, agent_metadata, local_profile_agents)}
     def projects_pane(): return {"state": "ready", "items": _project_rows(raw_tasks, projections)}
     def mission_pane():
         rows = []

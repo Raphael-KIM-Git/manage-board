@@ -532,19 +532,46 @@ def profile_agent_map() -> dict[str, dict]:
 
 
 def safe_profile_metadata(profile_dir: Path) -> dict[str, str]:
-    """Read only scalar model/provider labels; never expose raw config."""
+    """Read only bounded model/provider labels; never expose raw config."""
     path = profile_dir / 'config.yaml'
     if not path.exists():
         return {}
     values: dict[str, str] = {}
+    nested_model = False
+    model_indent: int | None = None
+    child_indent: int | None = None
     try:
         for line in path.read_text(encoding='utf-8').splitlines():
-            match = re.match(r'^\s*(model|provider)\s*:\s*([^#]+?)\s*$', line)
+            # Hermes stores the active label as model.default/provider. Keep
+            # accepting the flat shape for small fixtures and older profiles,
+            # but never parse arbitrary YAML or expose any other field.
+            model_block = re.match(r'^model\s*:\s*$', line)
+            if model_block:
+                nested_model = True
+                model_indent = len(line) - len(line.lstrip())
+                child_indent = None
+                continue
+            if nested_model:
+                stripped = line.lstrip(' \t')
+                indent = len(line) - len(stripped)
+                if stripped and indent <= (model_indent or 0):
+                    nested_model = False
+                elif stripped and not stripped.startswith('#'):
+                    if child_indent is None:
+                        child_indent = indent
+                    elif indent != child_indent:
+                        continue
+            match = re.match(
+                r'^\s*(?:default|provider)\s*:\s*([^#]+?)\s*$' if nested_model else
+                r'^\s*(model|provider)\s*:\s*([^#]+?)\s*$',
+                line,
+            )
             if not match:
                 continue
-            value = match.group(2).strip().strip('"\'')
-            if value and re.fullmatch(r'[A-Za-z0-9._/-]{1,80}', value):
-                values[match.group(1)] = value
+            key = 'model' if nested_model and line.lstrip().startswith('default') else 'provider' if nested_model else match.group(1)
+            value = (match.group(1) if nested_model else match.group(2)).strip().strip('"\'')
+            if value and '..' not in value and re.fullmatch(r'[A-Za-z0-9._/-]{1,80}', value):
+                values[key] = value
     except (OSError, UnicodeError):
         return {}
     return values
@@ -889,6 +916,7 @@ def build_dashboard_console() -> dict:
     registry.update(availability)
     return project_console_snapshot(tasks, instruction_records=list_instructions(INSTRUCTIONS_DIR),
                                     availability=availability, agent_registry=registry,
+                                    local_profile_agents=set(profile_agents),
                                     agent_metadata={name: {key: value for key, value in data.items() if key in {'model', 'provider'}}
                                                    for name, data in profile_agents.items()})
 
