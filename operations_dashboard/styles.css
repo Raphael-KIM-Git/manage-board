@@ -1161,3 +1161,11 @@ a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .followup-history-row span, .followup-history-row small { color: #5f6875; font-size: 12px; }
 .followup-history-outcome { margin: 3px 0 0; color: #4d5560; font-size: 12px; line-height: 1.45; }
 .followup-disabled { margin: 0; padding: 10px 12px; border-radius: 10px; color: #765c36; background: #fff8e9; font-size: 12px; line-height: 1.5; }
+
+/* 02 · AGENTS — 사분면 크기 유지한 채 에이전트 카드를 스크롤 없이 표시 */
+.pane-agents .console-pane-body { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-content: start; gap: 6px; }
+.pane-agents .agent-row { grid-template-columns: auto minmax(0, 1fr); align-items: center; min-height: 0; gap: 2px 6px; padding: 5px 8px; border-radius: 10px; }
+.pane-agents .agent-row .console-row-title { grid-column: 1 / -1; font-size: 12px; font-weight: 750; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-agents .agent-row .console-status-badge { grid-column: 1; grid-row: 2; justify-self: start; padding: 1px 5px; font-size: 9px; }
+.pane-agents .agent-row .console-row-meta { grid-column: 2; grid-row: 2; font-size: 9.5px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-agents .agent-row .console-row-action { grid-column: 1 / -1; grid-row: auto; justify-self: start; min-height: 22px; padding: 2px 8px; font-size: 10px; }
