@@ -1155,9 +1155,13 @@ function renderConsoleSnapshot(snapshot) {
     agents.forEach((agent) => {
       const row = el('article', 'console-row agent-row');
       const states = [...(agent.results || [])].reverse();
-      const state = states[0]?.state || (agent.dispatch?.[0]?.state === 'dispatched' ? 'dispatch_confirmed' : 'unknown');
+      const state = states[0]?.state
+        || (agent.dispatch?.[0]?.state === 'dispatched' ? 'dispatch_confirmed' : null)
+        || (agent.dispatch_state === 'not_dispatched' ? 'not_dispatched' : 'unknown');
       row.append(el('div', 'console-row-title', agent.name || agent.agent_id));
-      row.append(el('span', `console-status-badge console-${state}`, consoleStateLabel(state)));
+      const badge = el('span', `console-status-badge console-${state}`, consoleStateLabel(state));
+      badge.title = `설정 ${agent.configuration_state || '확인 불가'} · 배정 ${agent.dispatch_state || '확인 불가'} · 실행 ${agent.execution_state || '확인 불가'} · 연결 ${agent.availability || '확인 불가'}`;
+      row.append(badge);
       const metadata = [agent.role, agent.model, agent.provider].filter(Boolean).join(' · ');
       const metaText = metadata || `현재 ${agent.active_count || 0} · 결과 ${agent.completed_count || 0} · 검토 ${agent.review_count || 0}`;
       const metaNode = el('span', 'console-row-meta', metaText);
